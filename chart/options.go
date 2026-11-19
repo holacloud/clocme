@@ -41,6 +41,10 @@ type Options struct {
 	Height  int      // 200..1200
 	Title   bool
 	Legend  bool
+
+	// Interactive embeds the chart geometry (data-layout) and scopes the
+	// CSS so the SVG can be inlined in a page with a hover tooltip.
+	Interactive bool
 }
 
 func DefaultOptions() Options {
@@ -111,6 +115,7 @@ func ParseOptions(q url.Values) Options {
 	o.Height = parseSize(q.Get("h"), o.Height, 200, 1200)
 	o.Title = parseBool(q.Get("title"), o.Title)
 	o.Legend = parseBool(q.Get("legend"), o.Legend)
+	o.Interactive = parseBool(q.Get("interactive"), false)
 
 	return o
 }
@@ -152,6 +157,9 @@ func (o Options) Query() url.Values {
 	}
 	if !o.Legend {
 		q.Set("legend", "0")
+	}
+	if o.Interactive {
+		q.Set("interactive", "1")
 	}
 	return q
 }

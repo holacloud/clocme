@@ -24,6 +24,7 @@ and an **HTML page** with details and a chart builder to browsers.
 | `w`, `h`  | size in px                               | `800x400` |
 | `title`, `legend` | `0` to hide                      | `1`       |
 | `format`  | `svg`, `html`, `json` (force response)   | negotiated|
+| `interactive` | `1`: embeds chart geometry (`data-layout`) and scopes CSS, used by the web page tooltip | `0` |
 
 Extensions also force the format: `/github.com/owner/repo.svg`, `.json`.
 

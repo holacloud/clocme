@@ -19,7 +19,40 @@
       <p aria-busy="true">${ progressText }</p>
       <progress v-if="progress && progress.total" :value="progress.done" :max="progress.total"></progress>
     </div>
-    <img :src="imageSrc" src="/{{.Slug}}.svg{{with .Options.Query.Encode}}?{{.}}{{end}}" alt="Lines of code of {{.Repo.Owner}}/{{.Repo.Name}}" class="chart">
+    <div class="chart-box" ref="box"
+         :class="{ interactive: !!layout && !!points }"
+         @pointermove="hover" @pointerdown="hover" @pointerleave="unhover" @click="openCommit">
+      <div v-if="svg" v-html="svg" class="chart-svg"></div>
+      <img v-else :src="imageSrc" src="/{{.Slug}}.svg{{with .Options.Query.Encode}}?{{.}}{{end}}" alt="Lines of code of {{.Repo.Owner}}/{{.Repo.Name}}" class="chart">
+
+      <template v-if="hit" v-cloak>
+        <div class="cursor" :style="{ left: hit.x + 'px', top: hit.top + 'px', height: hit.height + 'px' }"></div>
+        <div v-for="d in hit.dots" class="dot" :style="{ left: hit.x + 'px', top: d.y + 'px', background: d.color }"></div>
+        <div class="tip" ref="tip" :style="tipStyle">
+          <div class="tip-head">
+            <code>${ hit.point.commit.slice(0, 7) }</code>
+            <span>${ formatDate(hit.point) }</span>
+          </div>
+          <div class="tip-author" v-if="hit.point.author">${ hit.point.author }</div>
+          <div class="tip-msg" v-if="hit.point.message">${ hit.point.message }</div>
+          <table class="tip-langs">
+            <tr v-for="r in hit.rows">
+              <td><i :style="{ background: r.color }"></i>${ r.name }</td>
+              <td>${ formatValue(r.value) }</td>
+              <td v-if="percentMode">${ r.percent.toFixed(1) }%</td>
+              <td :class="r.delta > 0 ? 'up' : 'down'">${ formatDelta(r.delta) }</td>
+            </tr>
+            <tr class="tip-total">
+              <td>Total</td>
+              <td>${ formatValue(hit.total) }</td>
+              <td v-if="percentMode"></td>
+              <td :class="hit.totalDelta > 0 ? 'up' : 'down'">${ formatDelta(hit.totalDelta) }</td>
+            </tr>
+          </table>
+          <div class="tip-foot">commit ${ hit.index + 1 } of ${ points.length } · click to open</div>
+        </div>
+      </template>
+    </div>
   </article>
 
   <details class="options" open>

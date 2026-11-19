@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -166,6 +167,9 @@ func TestAnalyzeHistory(t *testing.T) {
 		t.Fatalf("got %d points, want %d", len(points), len(shas))
 	}
 	for i, p := range points {
+		if p.Author != "test" || p.Date == 0 || (p.Message != "c"+strconv.Itoa(i+1) && p.Message != "merge feature") {
+			t.Errorf("point %d metadata: author=%q date=%d message=%q", i, p.Author, p.Date, p.Message)
+		}
 		if p.Commit != shas[i] {
 			t.Errorf("point %d commit %s, want %s", i, p.Commit, shas[i])
 		}

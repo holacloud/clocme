@@ -207,6 +207,15 @@ func (a *Analyzer) Analyze(ctx context.Context, repoID, head string, prev []mode
 		}
 	}
 
+	// Commit metadata is (re)filled for every point: this also backfills
+	// series computed before these fields existed.
+	for i := range points {
+		c := commits[i]
+		points[i].Author = c.author
+		points[i].Date = c.authorTime
+		points[i].Message = c.subject
+	}
+
 	if err := cache.save(a.cacheFile(repoID)); err != nil {
 		return nil, fmt.Errorf("saving cache: %w", err)
 	}

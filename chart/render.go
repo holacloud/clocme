@@ -2,6 +2,7 @@ package chart
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"io"
 	"math"
@@ -32,27 +33,53 @@ var (
 	darkPalette  = palette{Bg: "#0d1117", Border: "#30363d", Text: "#e6edf3", Muted: "#8d96a0", Grid: "#21262d", Axis: "#484f58"}
 )
 
-func paletteCSS(p palette) string {
-	return ".bg{fill:" + p.Bg + ";stroke:" + p.Border + "}" +
-		".t{fill:" + p.Text + "}" +
-		".m{fill:" + p.Muted + "}" +
-		".g{stroke:" + p.Grid + "}" +
-		".a{stroke:" + p.Axis + "}" +
-		".s{stroke:" + p.Bg + "}" +
-		".gh{fill:" + p.Grid + "}"
+// paletteCSS builds the color rules. pfx scopes every selector (e.g.
+// "#cloc-chart ") so an inlined SVG does not leak styles into the page.
+func paletteCSS(p palette, pfx string) string {
+	return pfx + ".bg{fill:" + p.Bg + ";stroke:" + p.Border + "}" +
+		pfx + ".t{fill:" + p.Text + "}" +
+		pfx + ".m{fill:" + p.Muted + "}" +
+		pfx + ".g{stroke:" + p.Grid + "}" +
+		pfx + ".a{stroke:" + p.Axis + "}" +
+		pfx + ".s{stroke:" + p.Bg + "}" +
+		pfx + ".gh{fill:" + p.Grid + "}"
 }
 
-func styleFor(theme string) string {
-	base := "text{font-family:" + fontFamily + "}"
+func styleFor(theme, pfx string) string {
+	base := pfx + "text{font-family:" + fontFamily + "}"
 	switch theme {
 	case ThemeDark:
-		return base + paletteCSS(darkPalette)
+		return base + paletteCSS(darkPalette, pfx)
 	case ThemeLight:
-		return base + paletteCSS(lightPalette)
+		return base + paletteCSS(lightPalette, pfx)
 	default:
-		return base + paletteCSS(lightPalette) +
-			"@media (prefers-color-scheme:dark){" + paletteCSS(darkPalette) + "}"
+		return base + paletteCSS(lightPalette, pfx) +
+			"@media (prefers-color-scheme:dark){" + paletteCSS(darkPalette, pfx) + "}"
 	}
+}
+
+// InteractiveID is the id of the root <svg> element of interactive charts.
+const InteractiveID = "cloc-chart"
+
+// Layout is the chart geometry embedded as JSON in the data-layout attribute
+// of interactive charts, so a script can map mouse positions to commits and
+// values to pixels.
+type Layout struct {
+	Width  int           `json:"width"`
+	Height int           `json:"height"`
+	Plot   [4]float64    `json:"plot"`   // left, top, right, bottom (SVG units)
+	X      string        `json:"x"`      // "date" (domain = monotonic unix times) | "commits" (domain = point indexes)
+	Domain [2]int64      `json:"domain"` // x value at plot left and right
+	YMax   float64       `json:"ymax"`   // value at plot top (100 in percent mode)
+	Mode   string        `json:"mode"`
+	Metric string        `json:"metric"`
+	Groups []LayoutGroup `json:"groups"` // stack order, bottom first
+}
+
+type LayoutGroup struct {
+	Name  string   `json:"name"`
+	Color string   `json:"color"`
+	Langs []string `json:"langs"`
 }
 
 type textItem struct {
@@ -101,6 +128,8 @@ type view struct {
 	FooterY     string
 	Footer      string
 	PointsInfo  string
+	ID          string
+	Layout      string
 }
 
 func xmlEscape(s string) string {
@@ -110,7 +139,7 @@ func xmlEscape(s string) string {
 }
 
 var svgTemplate = template.Must(template.New("svg").Funcs(template.FuncMap{"x": xmlEscape}).Parse(
-	`<svg xmlns="http://www.w3.org/2000/svg" width="{{.W}}" height="{{.H}}" viewBox="0 0 {{.W}} {{.H}}" role="img" aria-label="{{x .Title}}">
+	`<svg xmlns="http://www.w3.org/2000/svg" width="{{.W}}" height="{{.H}}" viewBox="0 0 {{.W}} {{.H}}" role="img" aria-label="{{x .Title}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Layout}} data-layout="{{x .Layout}}"{{end}}>
 <title>{{x .Title}}</title>
 <style>{{.Style}}</style>
 <rect class="bg" x="0.5" y="0.5" width="{{.InnerW}}" height="{{.InnerH}}" rx="6" stroke-width="1"/>
@@ -175,12 +204,17 @@ var svgTemplate = template.Must(template.New("svg").Funcs(template.FuncMap{"x": 
 
 func newView(title string, o Options) *view {
 	o = sanitize(o)
+	id, pfx := "", ""
+	if o.Interactive {
+		id, pfx = InteractiveID, "#"+InteractiveID+" "
+	}
 	return &view{
+		ID:        id,
 		W:         o.Width,
 		H:         o.Height,
 		InnerW:    o.Width - 1,
 		InnerH:    o.Height - 1,
-		Style:     styleFor(o.Theme),
+		Style:     styleFor(o.Theme, pfx),
 		Title:     title,
 		ShowTitle: o.Title && title != "",
 		TitleY:    fmtCoord(pad + 13),
@@ -439,8 +473,35 @@ func Render(w io.Writer, title string, points []model.Point, o Options) error {
 		}
 	}
 
+	if o.Interactive {
+		l := Layout{
+			Width:  o.Width,
+			Height: o.Height,
+			Plot:   [4]float64{round1(plotL), round1(plotT), round1(plotR), round1(plotB)},
+			X:      XCommits,
+			Domain: [2]int64{0, int64(max(0, s.Total-1))},
+			YMax:   yMax,
+			Mode:   o.Mode,
+			Metric: o.Metric,
+		}
+		if byTime {
+			l.X = XDate
+			l.Domain = [2]int64{s.FirstT, s.LastT}
+		}
+		for g, name := range s.Names {
+			l.Groups = append(l.Groups, LayoutGroup{Name: name, Color: colors[g], Langs: s.Members[g]})
+		}
+		b, err := json.Marshal(l)
+		if err != nil {
+			return err
+		}
+		v.Layout = string(b)
+	}
+
 	return execute(w, v)
 }
+
+func round1(f float64) float64 { return math.Round(f*10) / 10 }
 
 // layoutLegend flows legend items left to right, wrapping into rows.
 func layoutLegend(s *series, colors []string, left, top, width float64) ([]legendItem, float64) {

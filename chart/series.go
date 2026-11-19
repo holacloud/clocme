@@ -14,6 +14,7 @@ const otherLabel = "Other"
 // sampled values, already in metric units (or percent).
 type series struct {
 	Names   []string    // stack order: biggest first (bottom), "Other" last
+	Members [][]string  // languages summed in each group (one, or many for "Other")
 	Values  [][]float64 // [group][sample]
 	Index   []int       // original point index of each sample
 	Times   []int64     // (monotonic) time of each sample
@@ -137,6 +138,13 @@ func buildSeries(points []model.Point, o Options, maxSamples int) *series {
 		for _, lang := range rest {
 			group[lang] = len(langs)
 		}
+	}
+	s.Members = make([][]string, len(s.Names))
+	for lang, g := range group {
+		s.Members[g] = append(s.Members[g], lang)
+	}
+	for _, m := range s.Members {
+		sort.Strings(m)
 	}
 
 	// 3. sampling: bucket by x position, keep the last point of each bucket

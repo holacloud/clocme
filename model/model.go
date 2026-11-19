@@ -53,7 +53,15 @@ type Point struct {
 	Commit    string           `json:"commit"`
 	Time      int64            `json:"time"` // committer time, unix seconds, forced monotonic
 	Languages map[string]Stats `json:"languages"`
+
+	Author  string `json:"author,omitempty"`
+	Date    int64  `json:"date,omitempty"`    // author time, unix seconds (real, not monotonic)
+	Message string `json:"message,omitempty"` // subject line, truncated
 }
+
+// CurrentSchema is bumped when Point gains data that requires re-walking
+// already analyzed repos (2: commit author, date and message).
+const CurrentSchema = 2
 
 // Repo is the (small) metadata document. Kept in a cached store, so it must
 // stay light: the heavy series lives in Series.
@@ -70,6 +78,7 @@ type Repo struct {
 	Error  string `json:"error,omitempty"`
 
 	HeadCommit string `json:"head_commit"` // last analyzed commit
+	Schema     int    `json:"schema"`      // model.CurrentSchema at analysis time
 	Commits    int    `json:"commits"`     // number of points in the series
 
 	// Latest is a copy of the last point languages, handy for listings

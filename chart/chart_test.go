@@ -2,6 +2,7 @@ package chart
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"io"
 	"math"
@@ -323,4 +324,60 @@ func TestWriteSamples(t *testing.T) {
 	var buf bytes.Buffer
 	RenderMessage(&buf, "torvalds/linux · lines of code", "Generating chart… come back in a minute", DefaultOptions())
 	os.WriteFile(filepath.Join(dir, "message.svg"), buf.Bytes(), 0o644)
+}
+
+func TestRenderInteractive(t *testing.T) {
+	points := syntheticPoints(300)
+
+	plain := render(t, points, DefaultOptions())
+	if strings.Contains(plain, "data-layout") || strings.Contains(plain, InteractiveID) {
+		t.Fatal("non interactive chart must not embed the layout")
+	}
+
+	o := DefaultOptions()
+	o.Interactive = true
+	o.Top = 2
+	out := render(t, points, o)
+
+	var root struct {
+		ID     string `xml:"id,attr"`
+		Layout string `xml:"data-layout,attr"`
+		Style  string `xml:"style"`
+	}
+	if err := xml.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatal(err)
+	}
+	if root.ID != InteractiveID {
+		t.Errorf("id %q", root.ID)
+	}
+	if !strings.HasPrefix(root.Style, "#"+InteractiveID+" text{") || strings.Contains(root.Style, "}.t{") {
+		t.Errorf("style not scoped: %s", root.Style)
+	}
+
+	var l Layout
+	if err := json.Unmarshal([]byte(root.Layout), &l); err != nil {
+		t.Fatalf("layout json: %v (%s)", err, root.Layout)
+	}
+	if l.X != XDate || l.Domain[0] != points[0].Time || l.Domain[1] != points[len(points)-1].Time {
+		t.Errorf("domain %+v", l)
+	}
+	if !(l.Plot[0] < l.Plot[2] && l.Plot[1] < l.Plot[3]) || l.YMax <= 0 {
+		t.Errorf("geometry %+v", l)
+	}
+	if len(l.Groups) != 3 || l.Groups[2].Name != otherLabel || len(l.Groups[2].Langs) < 2 {
+		t.Fatalf("groups %+v", l.Groups)
+	}
+	for _, g := range l.Groups[:2] {
+		if len(g.Langs) != 1 || g.Langs[0] != g.Name || g.Color == "" {
+			t.Errorf("group %+v", g)
+		}
+	}
+
+	o.X = XCommits
+	out = render(t, points, o)
+	xml.Unmarshal([]byte(out), &root)
+	json.Unmarshal([]byte(root.Layout), &l)
+	if l.X != XCommits || l.Domain != [2]int64{0, 299} {
+		t.Errorf("commits domain %+v", l)
+	}
 }

@@ -165,7 +165,7 @@ func (s *Service) Request(ctx context.Context, host, owner, name string) (*model
 	case model.StatusPending:
 		s.Enqueue(id)
 	default:
-		if now.Sub(repo.CheckedAt) > s.opts.RefreshInterval {
+		if now.Sub(repo.CheckedAt) > s.opts.RefreshInterval || outdated(repo) {
 			s.Enqueue(id)
 		}
 	}
@@ -202,7 +202,7 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 // recoverInterrupted re-enqueues repos that were being processed when the
-// process died.
+// process died, and those analyzed with an older schema.
 func (s *Service) recoverInterrupted(ctx context.Context) {
 	all, err := s.repos.List(ctx)
 	if err != nil {
@@ -210,7 +210,7 @@ func (s *Service) recoverInterrupted(ctx context.Context) {
 		return
 	}
 	for _, r := range all {
-		if r.Status == model.StatusProcessing || r.Status == model.StatusPending {
+		if r.Status == model.StatusProcessing || r.Status == model.StatusPending || outdated(r) {
 			s.Enqueue(r.Id.Id)
 		}
 	}
@@ -354,7 +354,7 @@ func (s *Service) processRepo(ctx context.Context, id string) error {
 		return fmt.Errorf("sync: %w", err)
 	}
 
-	if head == repo.HeadCommit && repo.Status == model.StatusReady {
+	if head == repo.HeadCommit && repo.Status == model.StatusReady && !outdated(repo) {
 		_, err = s.update(ctx, id, func(r *model.Repo) error { r.CheckedAt = time.Now(); return nil })
 		return err
 	}
@@ -381,6 +381,7 @@ func (s *Service) processRepo(ctx context.Context, id string) error {
 		r.Status = model.StatusReady
 		r.Error = ""
 		r.HeadCommit = head
+		r.Schema = model.CurrentSchema
 		r.Commits = len(points)
 		r.Latest = nil
 		if len(points) > 0 {
@@ -391,6 +392,12 @@ func (s *Service) processRepo(ctx context.Context, id string) error {
 		return nil
 	})
 	return err
+}
+
+// outdated reports whether a repo was analyzed with an older Point schema
+// and needs a re-walk (cheap: line counts come from the blob cache).
+func outdated(r *model.Repo) bool {
+	return r.HeadCommit != "" && r.Schema < model.CurrentSchema
 }
 
 func (s *Service) putSeries(ctx context.Context, id string, points []model.Point) error {

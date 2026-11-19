@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // gitEnv makes git fail fast instead of prompting for credentials (private or
@@ -48,34 +49,56 @@ func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 
 // commit is one entry of the first-parent history.
 type commit struct {
-	sha    string
-	parent string // first parent, "" for the root commit
-	time   int64
+	sha        string
+	parent     string // first parent, "" for the root commit
+	time       int64  // committer time
+	authorTime int64
+	author     string
+	subject    string
 }
 
+// maxSubject caps the stored commit subject (in runes).
+const maxSubject = 200
+
 // firstParentLog returns the first-parent history of head, oldest first.
+// Fields are separated by \x1f and records by \x1e so that author names and
+// subjects can contain anything but those control characters.
 func firstParentLog(ctx context.Context, dir, head string) ([]commit, error) {
-	out, err := runGit(ctx, dir, "log", "--first-parent", "--reverse", "--format=%H %ct %P", head, "--")
+	out, err := runGit(ctx, dir, "log", "--first-parent", "--reverse", "--no-show-signature",
+		"--format=%H%x1f%ct%x1f%P%x1f%at%x1f%an%x1f%s%x1e", head, "--")
 	if err != nil {
 		return nil, err
 	}
 	var commits []commit
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 2 {
+	for _, rec := range strings.Split(string(out), "\x1e") {
+		rec = strings.TrimLeft(rec, "\n")
+		if rec == "" {
 			continue
+		}
+		f := strings.Split(rec, "\x1f")
+		if len(f) != 6 {
+			return nil, fmt.Errorf("parsing log record %q: %d fields", rec, len(f))
 		}
 		t, err := strconv.ParseInt(f[1], 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("parsing log line %q: %w", line, err)
+			return nil, fmt.Errorf("parsing log record %q: %w", rec, err)
 		}
-		c := commit{sha: f[0], time: t}
-		if len(f) > 2 {
-			c.parent = f[2]
+		at, _ := strconv.ParseInt(f[3], 10, 64)
+		c := commit{sha: f[0], time: t, authorTime: at, author: f[4], subject: truncateRunes(f[5], maxSubject)}
+		if parents := strings.Fields(f[2]); len(parents) > 0 {
+			c.parent = parents[0]
 		}
 		commits = append(commits, c)
 	}
 	return commits, nil
+}
+
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:n-1]) + "…"
 }
 
 // treeEntry is a file of a tree (ls-tree) or the new side of a diff entry.
