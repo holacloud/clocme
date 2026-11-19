@@ -42,6 +42,36 @@ func TestNegotiate(t *testing.T) {
 	}
 }
 
+func TestNegotiateBots(t *testing.T) {
+	cases := map[string]string{
+		"Twitterbot/1.0": FormatHTML,
+		"LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)": FormatHTML,
+		"facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)":             FormatHTML,
+		"Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)":                            FormatHTML,
+		"Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)":                     FormatHTML,
+		"TelegramBot (like TwitterBot)":                                                         FormatHTML,
+		"WhatsApp/2.23.20.0":                                                                    FormatHTML,
+		"Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)":               FormatHTML,
+		"Googlebot-Image/1.0":    FormatSVG,
+		"github-camo (876de43e)": FormatSVG,
+		"curl/8.0":               FormatSVG,
+	}
+	for ua, want := range cases {
+		r := httptest.NewRequest("GET", "/x", nil)
+		r.Header.Set("Accept", "*/*")
+		r.Header.Set("User-Agent", ua)
+		if got := negotiate(r, ""); got != want {
+			t.Errorf("%s: got %s, want %s", ua, got, want)
+		}
+	}
+	// explicit format still wins for bots
+	r := httptest.NewRequest("GET", "/x.svg", nil)
+	r.Header.Set("User-Agent", "Twitterbot/1.0")
+	if got := negotiate(r, FormatSVG); got != FormatSVG {
+		t.Errorf("extension must win: %s", got)
+	}
+}
+
 func TestSplitFormat(t *testing.T) {
 	cases := map[string][2]string{
 		"box":           {"box", ""},

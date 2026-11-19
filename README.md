@@ -53,7 +53,11 @@ PNG endpoints answer 501 and pages omit `og:image`.
    Data languages (JSON, YAML, Markdown…) are counted but hidden by default.
 
 Content negotiation: HTML when `Accept` contains `text/html` and
-`Sec-Fetch-Dest` is `document` or absent; SVG otherwise.
+`Sec-Fetch-Dest` is `document` or absent, or when the User-Agent is a link
+preview or search crawler (Twitterbot, LinkedInBot, facebookexternalhit,
+Slackbot, Discordbot, TelegramBot, WhatsApp, Googlebot, Bingbot...), which
+read the og:/twitter: tags but send `Accept: */*`; SVG otherwise (including
+GitHub's camo proxy).
 
 ## Dependencies
 
