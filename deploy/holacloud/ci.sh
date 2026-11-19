@@ -1,13 +1,19 @@
 #!/bin/bash
-# CI/CD of clocme on hola cloud: the docker flavor of the usual ci.sh.
+# CI/CD of a docker compose service on hola cloud: the docker flavor of the
+# usual ci.sh. Written for clocme but generic: the service name defaults to
+# the name of this script's directory (/containers/<service>).
+#
+# Contract with the repo's docker-compose.yml (see clocme's): it must honor
+# IMAGE_NAME, CONTAINER_NAME, VERSION, UID/GID, PORT, LISTEN, DATA_DIR and
+# CONFIG_FILE, and define a healthcheck.
 #
 # Everything lives in this script's directory (e.g. /containers/clocme):
 #
 #   ci.sh         this script (copied from deploy/holacloud/ci.sh)
 #   ci.env        settings and secrets of the CI (see ci.env.example)
-#   deploy_key    read-only deploy key of the repo (PRIVATE_KEY_FILE)
-#   config.json   clocme configuration (mounted read-only in the container)
-#   data/         clocme data (mounted as /data)
+#   deploy_key    optional, read-only deploy key for private repos
+#   config.json   service configuration (mounted read-only in the container)
+#   data/         service data (mounted as a volume)
 #   ci/code/      git checkout managed by this script, do not edit
 #   ci.log        output of the cron runs
 #
@@ -26,6 +32,7 @@ SCRIPT_FILENAME=$(readlink -f "$0")
 SCRIPT_DIR=$(dirname "$SCRIPT_FILENAME")
 
 source "${SCRIPT_DIR}/ci.env"
+SERVICE="${SERVICE:-$(basename "${SCRIPT_DIR}")}"
 
 FORCE=NO
 [ "${1:-}" == "--force" ] && FORCE=YES
@@ -93,8 +100,12 @@ DATA_DIR="${SCRIPT_DIR}/data"
 CONFIG_FILE="${SCRIPT_DIR}/config.json"
 
 if [ ! -f "${CONFIG_FILE}" ]; then
-  cp "${CODE_DIR}/config.example.json" "${CONFIG_FILE}"
-  notify "clocme: created ${CONFIG_FILE} from the example, fill it in (base_url, github_token...) and run ci.sh --force"
+  if [ -f "${CODE_DIR}/config.example.json" ]; then
+    cp "${CODE_DIR}/config.example.json" "${CONFIG_FILE}"
+  else
+    echo '{}' > "${CONFIG_FILE}"
+  fi
+  notify "${SERVICE}: created ${CONFIG_FILE}, fill it in and run ci.sh --force"
 fi
 mkdir -p "${DATA_DIR}"
 if [ "$(id -u)" == "0" ]; then
@@ -106,9 +117,9 @@ chmod 0600 "${CONFIG_FILE}"
 
 cd "${CODE_DIR}"
 export VERSION=$(git describe --tags --always)
-export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-clocme}"
-export CONTAINER_NAME="${CONTAINER_NAME:-clocme}"
-export IMAGE_NAME="${IMAGE_NAME:-clocme}"
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-${SERVICE}}"
+export CONTAINER_NAME="${CONTAINER_NAME:-${SERVICE}}"
+export IMAGE_NAME="${IMAGE_NAME:-${SERVICE}}"
 export PORT="${PORT:-7070}"
 export LISTEN="${LISTEN:-127.0.0.1}"
 export DATA_DIR CONFIG_FILE

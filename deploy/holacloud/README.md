@@ -9,6 +9,7 @@ image and restarts the container. Docker keeps the container running
 /containers/clocme/
   ci.sh          copy of deploy/holacloud/ci.sh
   ci.env         CI settings and secrets (from ci.env.example)
+  deploy_key     optional: read-only deploy key, only for private repos
   config.json    clocme configuration (created from config.example.json on the first run)
   data/          clones, series, caches (docker volume)
   ci/code/       checkout managed by ci.sh
@@ -35,29 +36,48 @@ Requirements on the server: docker with the compose plugin, git, curl, flock.
    ss -ltn 'sport = :7070'
    ```
 
-   The repo is public and is cloned over https. A private repo would need
-   an ssh `REPO` and a read-only deploy key in `PRIVATE_KEY_FILE`.
+3. Deploy key (only for private repos; clocme is public and uses https):
 
-3. First run (clones, builds, starts with the example config):
+   ```sh
+   ssh-keygen -t ed25519 -N '' -C clocme-deploy -f /containers/clocme/deploy_key
+   cat /containers/clocme/deploy_key.pub
+   ```
+
+   Add the public key in GitHub > repo Settings > Deploy keys (read-only,
+   no write access) and set in `ci.env`:
+
+   ```sh
+   REPO=git@github.com:holacloud/clocme.git
+   PRIVATE_KEY_FILE=/containers/clocme/deploy_key
+   ```
+
+   Switching an existing install from https to ssh: also update the remote
+   of the checkout (or delete `ci/code` and let the next run clone again):
+
+   ```sh
+   git -C /containers/clocme/ci/code remote set-url origin git@github.com:holacloud/clocme.git
+   ```
+
+4. First run (clones, builds, starts with the example config):
 
    ```sh
    /containers/clocme/ci.sh
    ```
 
-4. Fill `config.json`: at least `"base_url": "https://cloc.hola.cloud"` and
+5. Fill `config.json`: at least `"base_url": "https://cloc.hola.cloud"` and
    `github_token`; optionally `telegram` and `instantlogs`. Apply it:
 
    ```sh
    /containers/clocme/ci.sh --force
    ```
 
-5. Cron (`crontab -e`):
+6. Cron (`crontab -e`):
 
    ```
    * * * * * /containers/clocme/ci.sh >> /containers/clocme/ci.log 2>&1
    ```
 
-6. Glue2 (TLS and certificate are automatic): route the host
+7. Glue2 (TLS and certificate are automatic): route the host
    `cloc.hola.cloud` to `http://127.0.0.1:7070` (`PORT` in `ci.env`). The
    port only listens on loopback (`LISTEN`), so Glue2 must run on the host.
    The route must be public (no Glue2 login) and forward the `Accept` and
@@ -73,3 +93,12 @@ Requirements on the server: docker with the compose plugin, git, curl, flock.
 | Status / health | `docker ps --filter name=clocme` |
 | Stop | `cd ci/code && docker compose -p clocme down` (cron would start it again only on new commits or `--force`) |
 | CI history | `tail -f ci.log` |
+
+## Reusing it for another docker service
+
+`ci.sh` is generic: copy it to `/containers/<service>/` and the service name
+(compose project, container, image) is taken from the directory name. The
+repo's `docker-compose.yml` must honor the same variables as clocme's:
+`IMAGE_NAME`, `CONTAINER_NAME`, `VERSION`, `UID`/`GID`, `PORT`, `LISTEN`,
+`DATA_DIR`, `CONFIG_FILE`, and define a healthcheck (the deploy waits for
+it). Use a different `PORT` per service.
