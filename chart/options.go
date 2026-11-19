@@ -49,8 +49,8 @@ type Options struct {
 
 func DefaultOptions() Options {
 	return Options{
-		Top:    8,
-		X:      XDate,
+		Top:    5,
+		X:      XCommits,
 		Mode:   ModeStacked,
 		Metric: MetricCode,
 		Theme:  ThemeAuto,

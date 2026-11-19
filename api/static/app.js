@@ -6,7 +6,7 @@
   const cfg = JSON.parse(el.dataset.config);
 
   const current = Object.fromEntries(new URLSearchParams(cfg.query));
-  const base = { top: '8', x: 'date', mode: 'stacked', metric: 'code', theme: 'auto', exclude: '' };
+  const base = { top: '5', x: 'commits', mode: 'stacked', metric: 'code', theme: 'auto', exclude: '' };
 
   const metricOf = {
     code: (s) => s.code || 0,

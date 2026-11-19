@@ -337,6 +337,7 @@ func TestRenderInteractive(t *testing.T) {
 	o := DefaultOptions()
 	o.Interactive = true
 	o.Top = 2
+	o.X = XDate
 	out := render(t, points, o)
 
 	var root struct {

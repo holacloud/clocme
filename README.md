@@ -14,8 +14,8 @@ and an **HTML page** with details and a chart builder to browsers.
 
 | Param     | Values                                   | Default   |
 |-----------|------------------------------------------|-----------|
-| `top`     | number of languages, `0` = all           | `8`       |
-| `x`       | `date`, `commits`                        | `date`    |
+| `top`     | number of languages, `0` = all           | `5`       |
+| `x`       | `commits`, `date`                        | `commits` |
 | `mode`    | `stacked`, `percent`, `lines`            | `stacked` |
 | `metric`  | `code`, `lines`, `comments`, `files`     | `code`    |
 | `exclude` | comma-separated languages                |           |
