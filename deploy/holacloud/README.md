@@ -9,7 +9,6 @@ image and restarts the container. Docker keeps the container running
 /containers/clocme/
   ci.sh          copy of deploy/holacloud/ci.sh
   ci.env         CI settings and secrets (from ci.env.example)
-  deploy_key     read-only deploy key for the repo
   config.json    clocme configuration (created from config.example.json on the first run)
   data/          clones, series, caches (docker volume)
   ci/code/       checkout managed by ci.sh
@@ -29,12 +28,15 @@ Requirements on the server: docker with the compose plugin, git, curl, flock.
    # create ci.env from deploy/holacloud/ci.env.example
    ```
 
-2. Deploy key (only if the repo is private):
+2. Check that the port is free (no output = free), otherwise change `PORT`
+   in `ci.env`:
 
    ```sh
-   ssh-keygen -t ed25519 -N '' -C clocme-deploy -f /containers/clocme/deploy_key
-   cat /containers/clocme/deploy_key.pub   # GitHub > repo Settings > Deploy keys (read-only)
+   ss -ltn 'sport = :7070'
    ```
+
+   The repo is public and is cloned over https. A private repo would need
+   an ssh `REPO` and a read-only deploy key in `PRIVATE_KEY_FILE`.
 
 3. First run (clones, builds, starts with the example config):
 
@@ -55,8 +57,12 @@ Requirements on the server: docker with the compose plugin, git, curl, flock.
    * * * * * /containers/clocme/ci.sh >> /containers/clocme/ci.log 2>&1
    ```
 
-6. Reverse proxy: `cloc.hola.cloud` -> `http://127.0.0.1:7070` (`PORT` in
-   `ci.env`). The port only listens on loopback (`LISTEN`).
+6. Glue2 (TLS and certificate are automatic): route the host
+   `cloc.hola.cloud` to `http://127.0.0.1:7070` (`PORT` in `ci.env`). The
+   port only listens on loopback (`LISTEN`), so Glue2 must run on the host.
+   The route must be public (no Glue2 login) and forward the `Accept` and
+   `Sec-Fetch-Dest` headers: the same URL serves the SVG or the HTML page
+   depending on them.
 
 ## Operations
 
