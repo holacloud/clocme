@@ -59,6 +59,8 @@ Runtime requirement: the `git` binary.
 ## Run
 
 ```sh
+make run              # http://localhost:7070 (PORT=xxxx to change)
+make test
 go run . -datadir ./data -githubtoken "$GITHUB_TOKEN"   # or env DATADIR, GITHUBTOKEN, TELEGRAM_BOT, TELEGRAM_CHAT...
 go run . -help        # all options
 ```
