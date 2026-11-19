@@ -92,6 +92,13 @@ directory (`/app` in the container). Keys are the `json` tags of
 variables in docker-compose or they will override the file. `data_dir` and
 `addr` are fixed by the image (`/data`, `:8080`).
 
+Logs always go to stderr (`make logs`). To also ship them to
+[instantlogs.io](https://instantlogs.io), fill the `instantlogs` section of
+`config.json` (`logger_id`, `api_key`, `api_secret`; `endpoint` optional for a
+self-hosted instantlogsd). Shipping never blocks the service: lines are
+buffered (1 MB) and sent in batches every second, retried with backoff when
+the endpoint is down, and dropped (with a notice) if the buffer fills up.
+
 Optional docker-side settings (host `PORT`, `DATA_DIR`, `CONFIG_FILE`) can go
 in `.env`, see `.env.example`.
 

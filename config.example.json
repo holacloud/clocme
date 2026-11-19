@@ -10,5 +10,10 @@
   "telegram": {
     "bot": "",
     "chat": ""
+  },
+  "instantlogs": {
+    "logger_id": "",
+    "api_key": "",
+    "api_secret": ""
   }
 }

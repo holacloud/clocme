@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/holacloud/clocme/logship"
 	"github.com/holacloud/clocme/telegram"
 )
 
@@ -21,6 +22,10 @@ type Config struct {
 	AnalyzeTimeoutMinutes int   `json:"analyze_timeout_minutes" usage:"Max minutes for one sync+analysis"`
 
 	Telegram telegram.Config `json:"telegram"`
+
+	// Logs always go to stderr (docker logs); with a logger_id they are also
+	// shipped to instantlogs.io.
+	Instantlogs logship.Config `json:"instantlogs"`
 
 	ShowConfig bool `json:"show_config" usage:"Print config and exit"`
 	Version    bool `json:"version" usage:"Print version and exit"`

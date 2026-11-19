@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/holacloud/clocme/api"
 	"github.com/holacloud/clocme/config"
 	"github.com/holacloud/clocme/githost"
+	"github.com/holacloud/clocme/logship"
 	"github.com/holacloud/clocme/model"
 	"github.com/holacloud/clocme/raster"
 	"github.com/holacloud/clocme/service"
@@ -34,6 +36,13 @@ func main() {
 		fmt.Println(config.VERSION)
 		return
 	}
+	// Before anything logs: optionally ship logs to instantlogs as well.
+	shipper := logship.New(c.Instantlogs)
+	if shipper != nil {
+		log.SetOutput(io.MultiWriter(os.Stderr, shipper))
+		log.Println("shipping logs to instantlogs")
+	}
+
 	if c.ShowConfig {
 		e := json.NewEncoder(os.Stdout)
 		e.SetIndent("", "  ")
@@ -102,7 +111,13 @@ func main() {
 	}()
 
 	log.Printf("clocme %s listening on %s", config.VERSION, c.Addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+	err = server.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Println(err)
+	}
+	log.Println("bye")
+	shipper.Close(5 * time.Second) // deliver the last lines
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		os.Exit(1)
 	}
 }
