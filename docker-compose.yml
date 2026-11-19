@@ -7,21 +7,24 @@
 # App configuration goes in config.json (read by goconfig from the working
 # directory). Do not add an `environment:` block for app settings here:
 # environment variables take precedence over config.json and would silently
-# override it. Optional docker-side settings (PORT, DATA_DIR, CONFIG_FILE)
-# can go in .env.
+# override it. Optional docker-side settings (PORT, LISTEN, DATA_DIR,
+# CONFIG_FILE, CONTAINER_NAME, IMAGE_NAME) can go in .env or the environment
+# (see deploy/holacloud for the server).
 services:
   clocme:
     build:
       context: .
       args:
         VERSION: ${VERSION:-dev}
-    image: clocme:${VERSION:-dev}
-    container_name: clocme
+    image: ${IMAGE_NAME:-clocme}:${VERSION:-dev}
+    container_name: ${CONTAINER_NAME:-clocme}
     restart: unless-stopped
     # Run with the host user so files in the data dir stay owned by you.
     user: "${UID:-1000}:${GID:-1000}"
     ports:
-      - "${PORT:-7070}:8080"
+      # Loopback by default: docker bypasses host firewalls (ufw), so on a
+      # server the port must not be public; a reverse proxy goes in front.
+      - "${LISTEN:-127.0.0.1}:${PORT:-7070}:8080"
     volumes:
       - ${DATA_DIR:-./data}:/data
       - ${CONFIG_FILE:-./config.json}:/app/config.json:ro
