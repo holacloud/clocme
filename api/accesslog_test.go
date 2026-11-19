@@ -33,6 +33,12 @@ func TestAccessLog(t *testing.T) {
 	}
 
 	buf.Reset()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/healthz", nil))
+	if buf.Len() != 0 {
+		t.Errorf("healthz must not be logged: %q", buf.String())
+	}
+
+	buf.Reset()
 	h = accessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotModified) }))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 	if !strings.Contains(buf.String(), "GET /x 304 - 0B ") {

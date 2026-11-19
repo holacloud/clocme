@@ -1,5 +1,7 @@
 # cloc.hola.cloud
 
+[![Lines of code](https://cloc.hola.cloud/github.com/holacloud/clocme)](https://cloc.hola.cloud/github.com/holacloud/clocme)
+
 Lines of code over time, per language, for any public GitHub repository, as an
 embeddable SVG.
 

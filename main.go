@@ -32,22 +32,23 @@ func main() {
 	c := config.Default()
 	goconfig.Read(c)
 
+	// Informational flags first: they must not start the log shipper.
 	if c.Version {
 		fmt.Println(config.VERSION)
 		return
 	}
-	// Before anything logs: optionally ship logs to instantlogs as well.
-	shipper := logship.New(c.Instantlogs)
-	if shipper != nil {
-		log.SetOutput(io.MultiWriter(os.Stderr, shipper))
-		log.Println("shipping logs to instantlogs")
-	}
-
 	if c.ShowConfig {
 		e := json.NewEncoder(os.Stdout)
 		e.SetIndent("", "  ")
 		e.Encode(c)
 		return
+	}
+
+	// Before anything else logs: optionally ship logs to instantlogs as well.
+	shipper := logship.New(c.Instantlogs)
+	if shipper != nil {
+		log.SetOutput(io.MultiWriter(os.Stderr, shipper))
+		log.Println("shipping logs to instantlogs")
 	}
 
 	// Metadata is small and read on every request: disk + memory cache.

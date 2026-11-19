@@ -39,6 +39,11 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 //	GET /github.com/a/b 200 text/html 18.2KB 2.1ms ip=1.2.3.4 ua="LinkedInBot/1.0 ..." accept="*/*" dest=""
 func accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			// docker healthcheck every 30s: ~2.9k useless lines a day
+			next.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w}
 		next.ServeHTTP(rec, r)
