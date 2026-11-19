@@ -3,17 +3,53 @@ PORT    ?= 7070
 DATADIR ?= ./data
 LDFLAGS := -s -w -X github.com/holacloud/clocme/config.VERSION=$(VERSION)
 
-.PHONY: run build test vet fmt tidy clean docker-build docker-run
+# docker compose gets the version and the host user (so files in the data
+# volume stay owned by you). Other settings come from .env (see .env.example).
+COMPOSE := VERSION=$(VERSION) UID=$(shell id -u) GID=$(shell id -g) docker compose
 
-## run: build and run locally on PORT (default 7070)
+.PHONY: up down restart logs ps rebuild docker-test run build test vet fmt tidy clean help
+
+## up: build the image and start the service in docker (data mounted from ./data)
+up:
+	mkdir -p $(DATADIR)
+	$(COMPOSE) up -d --build
+	@echo "clocme running on http://localhost:$(PORT)"
+
+## down: stop and remove the container (data is kept)
+down:
+	$(COMPOSE) down
+
+## restart: restart the container without rebuilding
+restart:
+	$(COMPOSE) restart
+
+## logs: follow the service logs
+logs:
+	$(COMPOSE) logs -f
+
+## ps: container status and health
+ps:
+	$(COMPOSE) ps
+
+## rebuild: rebuild the image from scratch and restart
+rebuild:
+	$(COMPOSE) build --no-cache
+	$(COMPOSE) up -d
+
+## docker-test: run the test suite inside a golang container
+docker-test:
+	docker run --rm -v $(CURDIR):/src -w /src -v clocme-gocache:/root/.cache -v clocme-gomod:/go/pkg/mod \
+		golang:1.27 sh -c 'git config --global safe.directory "*" && go vet ./... && go test -race ./...'
+
+## run: (without docker) build and run on the host
 run: build
 	./clocme -addr :$(PORT) -baseurl http://localhost:$(PORT) -datadir $(DATADIR)
 
-## build: compile the binary
+## build: (without docker) compile the binary
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o clocme .
 
-## test: run all tests with the race detector
+## test: (without docker) run all tests with the race detector
 test:
 	go test -race ./...
 
@@ -26,15 +62,9 @@ fmt:
 tidy:
 	go mod tidy
 
-## clean: remove binary (keeps data)
+## clean: remove the local binary (keeps data)
 clean:
 	rm -f clocme
-
-docker-build:
-	docker build --build-arg VERSION=$(VERSION) -t clocme:$(VERSION) -t clocme:latest .
-
-docker-run: docker-build
-	docker run --rm -p $(PORT):8080 -v clocme-data:/data clocme:latest
 
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## //'

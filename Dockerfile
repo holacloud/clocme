@@ -8,11 +8,22 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/holacloud/clo
 
 FROM alpine:3.22
 # git is required at runtime: clones and blob reads shell out to it.
-RUN apk add --no-cache git ca-certificates && adduser -D -u 1000 clocme && mkdir /data && chown clocme /data
+# safe.directory: the data volume may be owned by a different uid than the
+# one running the container (bind mounts) and git would refuse those repos.
+RUN apk add --no-cache git ca-certificates \
+ && git config --system safe.directory '*' \
+ && adduser -D -u 1000 clocme \
+ && mkdir /data && chown clocme /data
+COPY --from=build /clocme /app/clocme
+
+# uid 1000 by default; docker-compose runs it with the host uid/gid instead.
 USER clocme
 WORKDIR /app
-COPY --from=build /clocme /app/clocme
-ENV DATADIR=/data
+ENV DATADIR=/data \
+    ADDR=:8080 \
+    HOME=/tmp
 VOLUME /data
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 ENTRYPOINT ["/app/clocme"]

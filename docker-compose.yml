@@ -1,0 +1,29 @@
+# Everything runs inside docker; data lives on the host and is mounted.
+#
+#   cp .env.example .env   # optional: tokens, port, data dir...
+#   make up                # build + start
+#   make logs
+#   make down
+services:
+  clocme:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    image: clocme:${VERSION:-dev}
+    container_name: clocme
+    restart: unless-stopped
+    # Run with the host user so files in the data dir stay owned by you.
+    user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      - "${PORT:-7070}:8080"
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    environment:
+      BASEURL: ${BASEURL:-http://localhost:7070}
+      GITHUBTOKEN: ${GITHUBTOKEN:-}
+      TELEGRAM_BOT: ${TELEGRAM_BOT:-}
+      TELEGRAM_CHAT: ${TELEGRAM_CHAT:-}
+      MAXREPOSIZEMB: ${MAXREPOSIZEMB:-500}
+      REFRESHMINUTES: ${REFRESHMINUTES:-60}
+      WORKERS: ${WORKERS:-1}

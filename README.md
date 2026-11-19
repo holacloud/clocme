@@ -59,19 +59,22 @@ Runtime requirement: the `git` binary.
 
 ## Run
 
-```sh
-make run              # http://localhost:7070 (PORT=xxxx to change)
-make test
-go run . -datadir ./data -githubtoken "$GITHUB_TOKEN"   # or env DATADIR, GITHUBTOKEN, TELEGRAM_BOT, TELEGRAM_CHAT...
-go run . -help        # all options
-```
-
-Docker:
+Everything runs in docker; data lives on the host (`./data`) and is mounted
+as a volume, so it survives rebuilds and is owned by your user.
 
 ```sh
-docker build -t clocme .
-docker run -p 8080:8080 -v clocme-data:/data clocme
+cp .env.example .env   # optional: GITHUBTOKEN, TELEGRAM_*, PORT, DATA_DIR, BASEURL...
+make up                # build image + start on http://localhost:7070
+make logs              # follow logs
+make ps                # status / health
+make down              # stop (data is kept)
+make docker-test       # vet + tests inside a golang container
 ```
+
+A `GITHUBTOKEN` is strongly recommended: without it the GitHub API allows
+only 60 requests/hour (one per analysis).
+
+Without docker: `make run`, `make test` (needs Go and git).
 
 ## Data layout
 
