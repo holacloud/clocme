@@ -209,3 +209,40 @@ func TestRequestOwnerRegistersReposInBulk(t *testing.T) {
 		t.Fatalf("ghost: %v", err)
 	}
 }
+
+type failingAnalyzer struct{ fakeAnalyzer }
+
+func (f *failingAnalyzer) Sync(ctx context.Context, repoID, cloneURL, branch string) (string, error) {
+	return "", errors.New("boom")
+}
+
+func TestErrorIsRetriedSoonOnRequest(t *testing.T) {
+	s := newTestService(&failingAnalyzer{}, &fakeHost{size: 10})
+	ctx := context.Background()
+	s.Request(ctx, "github.com", "a", "b")
+	if id := s.next(ctx); id == "" {
+		t.Fatal("expected the new repo")
+	} else {
+		s.process(ctx, id)
+		s.mu.Lock()
+		delete(s.working, id)
+		s.mu.Unlock()
+	}
+	r, _ := s.Get(ctx, "github.com~a~b")
+	if r.Status != model.StatusError {
+		t.Fatalf("status %s", r.Status)
+	}
+
+	// just failed: a new request does not retry yet
+	s.Request(ctx, "github.com", "a", "b")
+	if id := s.next(ctx); id != "" {
+		t.Fatalf("retried too soon: %s", id)
+	}
+
+	// failed more than errorRetryAfter ago: retried
+	s.update(ctx, "github.com~a~b", func(r *model.Repo) error { r.CheckedAt = time.Now().Add(-errorRetryAfter - time.Second); return nil })
+	s.Request(ctx, "github.com", "a", "b")
+	if id := s.next(ctx); id != "github.com~a~b" {
+		t.Fatalf("expected retry, got %q", id)
+	}
+}

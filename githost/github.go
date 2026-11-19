@@ -3,11 +3,13 @@
 package githost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -39,31 +41,6 @@ func NewGithub(token string) *Github {
 }
 
 func (g *Github) Info(ctx context.Context, owner, name string) (*RepoInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/repos/%s/%s", g.BaseURL, owner, name), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "clocme")
-	if g.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+g.Token)
-	}
-
-	resp, err := g.Client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-	case http.StatusNotFound, http.StatusUnavailableForLegalReasons:
-		return nil, ErrNotFound
-	default:
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("github api: status %d: %s", resp.StatusCode, b)
-	}
-
 	var body struct {
 		Name          string `json:"name"`
 		DefaultBranch string `json:"default_branch"`
@@ -74,8 +51,8 @@ func (g *Github) Info(ctx context.Context, owner, name string) (*RepoInfo, error
 			Login string `json:"login"`
 		} `json:"owner"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("github api: decode: %w", err)
+	if _, err := g.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s", g.BaseURL, owner, name), &body); err != nil {
+		return nil, err
 	}
 	if body.Private {
 		return nil, ErrNotFound
@@ -174,34 +151,69 @@ func (g *Github) Owner(ctx context.Context, login string, maxRepos int) (*OwnerL
 }
 
 // getJSON GETs an API url and decodes the body into v.
+//
+// If the token is rejected (401, or a 403 that is not a rate limit, e.g. an
+// organization that forbids fine-grained tokens with a long lifetime) the
+// request is retried anonymously: we only read public data, so a token that
+// some organization refuses must not break access to its public repos.
 func (g *Github) getJSON(ctx context.Context, u string, v any) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	resp, body, err := g.get(ctx, u, g.Token)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "clocme")
-	if g.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+g.Token)
+	if g.Token != "" && tokenRejected(resp.StatusCode, body) {
+		log.Printf("github api: token rejected for %s (status %d), retrying anonymously: %s", u, resp.StatusCode, strings.TrimSpace(string(body)))
+		if resp, body, err = g.get(ctx, u, ""); err != nil {
+			return nil, err
+		}
 	}
-	resp, err := g.Client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
 
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound, http.StatusUnavailableForLegalReasons:
 		return nil, ErrNotFound
 	default:
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("github api: status %d: %s", resp.StatusCode, b)
+		return nil, fmt.Errorf("github api: status %d: %s", resp.StatusCode, body)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+	if err := json.Unmarshal(body, v); err != nil {
 		return nil, fmt.Errorf("github api: decode: %w", err)
 	}
 	return resp, nil
+}
+
+// get does one request and reads the (limited) body.
+func (g *Github) get(ctx context.Context, u, token string) (*http.Response, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "clocme")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := g.Client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp, body, nil
+}
+
+// tokenRejected tells an authentication/authorization refusal of the token
+// apart from a rate limit (which also comes as 403).
+func tokenRejected(status int, body []byte) bool {
+	switch status {
+	case http.StatusUnauthorized:
+		return true
+	case http.StatusForbidden:
+		return !bytes.Contains(bytes.ToLower(body), []byte("rate limit"))
+	}
+	return false
 }
 
 // nextLink extracts the rel="next" url of a Link header (pagination).

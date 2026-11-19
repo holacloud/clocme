@@ -50,6 +50,10 @@ type Options struct {
 	BaseURL         string
 }
 
+// errorRetryAfter is how long a failed repo waits before a new request
+// retries it.
+const errorRetryAfter = 5 * time.Minute
+
 type Progress struct {
 	Phase string `json:"phase"` // "sync" | "analyze"
 	Done  int    `json:"done"`
@@ -212,6 +216,12 @@ func (s *Service) register(ctx context.Context, host, owner, name string, bulk b
 		// waits for a manual baseline, see notifyTooBig
 	case model.StatusPending:
 		s.Enqueue(id)
+	case model.StatusError:
+		// failures are often transient (API limits, network): retry soon
+		// when somebody asks again, not only after the refresh interval
+		if now.Sub(repo.CheckedAt) > errorRetryAfter {
+			s.Enqueue(id)
+		}
 	default:
 		if now.Sub(repo.CheckedAt) > s.opts.RefreshInterval || outdated(repo) {
 			s.Enqueue(id)
