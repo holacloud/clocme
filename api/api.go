@@ -50,6 +50,12 @@ func New(svc *service.Service, baseURL, version string) (*box.B, error) {
 	t, err := template.New("").Funcs(template.FuncMap{
 		"compact": chart.FormatCompact,
 		"since":   since,
+		"short": func(sha string) string {
+			if len(sha) > 7 {
+				return sha[:7]
+			}
+			return sha
+		},
 	}).ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -70,6 +76,8 @@ func New(svc *service.Service, baseURL, version string) (*box.B, error) {
 
 	b.HandleFunc("GET", "/", a.home)
 	b.HandleFunc("GET", "/go", a.goTo)
+	b.HandleFunc("GET", "/sitemap.xml", a.sitemap)
+	b.HandleFunc("GET", "/robots.txt", a.robots)
 	b.HandleFunc("GET", "/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 
 	static, _ := fs.Sub(staticFS, "static")
@@ -105,7 +113,16 @@ func (a *API) render(w http.ResponseWriter, status int, name string, data any) {
 	w.Write(buf.Bytes())
 }
 
+// pageMeta feeds the <head> of every page (title, SEO tags).
+type pageMeta struct {
+	Title       string
+	Description string
+	Canonical   string
+	NoIndex     bool
+}
+
 type homeData struct {
+	Meta    pageMeta
 	BaseURL string
 	Version string
 	Recent  []*model.Repo
@@ -113,12 +130,21 @@ type homeData struct {
 	Input   string
 }
 
+func (a *API) homeMeta(noIndex bool) pageMeta {
+	return pageMeta{
+		Title:       "cloc.hola.cloud · lines of code history for your README",
+		Description: "Chart the lines of code of any public GitHub repository, per language, commit after commit, and embed it in your README with one line.",
+		Canonical:   a.baseURL + "/",
+		NoIndex:     noIndex,
+	}
+}
+
 func (a *API) home(w http.ResponseWriter, r *http.Request) {
 	recent, err := a.svc.Recent(r.Context(), 12)
 	if err != nil {
 		log.Println("recent:", err)
 	}
-	a.render(w, http.StatusOK, "home.html", homeData{BaseURL: a.baseURL, Version: a.version, Recent: recent})
+	a.render(w, http.StatusOK, "home.html", homeData{Meta: a.homeMeta(false), BaseURL: a.baseURL, Version: a.version, Recent: recent})
 }
 
 // goTo receives the home form (?repo=...) and redirects to the repo page.
@@ -127,7 +153,7 @@ func (a *API) goTo(w http.ResponseWriter, r *http.Request) {
 	slug, err := parseRepoInput(input)
 	if err != nil {
 		recent, _ := a.svc.Recent(r.Context(), 12)
-		a.render(w, http.StatusBadRequest, "home.html", homeData{BaseURL: a.baseURL, Version: a.version, Recent: recent, Error: err.Error(), Input: input})
+		a.render(w, http.StatusBadRequest, "home.html", homeData{Meta: a.homeMeta(true), BaseURL: a.baseURL, Version: a.version, Recent: recent, Error: err.Error(), Input: input})
 		return
 	}
 	http.Redirect(w, r, "/"+slug, http.StatusSeeOther)
@@ -191,7 +217,7 @@ func (a *API) notFound(w http.ResponseWriter, r *http.Request, format string, op
 		json.NewEncoder(w).Encode(map[string]string{"error": msg})
 	case FormatHTML:
 		recent, _ := a.svc.Recent(r.Context(), 12)
-		a.render(w, http.StatusNotFound, "home.html", homeData{BaseURL: a.baseURL, Version: a.version, Recent: recent, Error: msg, Input: slug})
+		a.render(w, http.StatusNotFound, "home.html", homeData{Meta: a.homeMeta(true), BaseURL: a.baseURL, Version: a.version, Recent: recent, Error: msg, Input: slug})
 	default:
 		// 200 so that image proxies display the message instead of a broken image.
 		writeSVG(w, "no-cache", func(buf *bytes.Buffer) error { return chart.RenderMessage(buf, slug, msg, opts) })
@@ -291,6 +317,7 @@ type langRow struct {
 }
 
 type repoData struct {
+	Meta      pageMeta
 	BaseURL   string
 	Version   string
 	Repo      *model.Repo
@@ -342,6 +369,8 @@ func (a *API) repoHTML(w http.ResponseWriter, r *http.Request, repo *model.Repo,
 		}
 	}
 
+	data.Meta = repoMeta(repo, pageURL, data.Total, data.Languages)
+
 	oj, _ := json.Marshal(map[string]any{
 		"slug":     slug,
 		"pageURL":  pageURL,
@@ -353,6 +382,33 @@ func (a *API) repoHTML(w http.ResponseWriter, r *http.Request, repo *model.Repo,
 	data.OptsJSON = template.JS(oj)
 
 	a.render(w, http.StatusOK, "repo.html", data)
+}
+
+func repoMeta(repo *model.Repo, pageURL string, total model.Stats, langs []langRow) pageMeta {
+	name := repo.Owner + "/" + repo.Name
+	m := pageMeta{
+		Title:     name + " · lines of code · cloc.hola.cloud",
+		Canonical: pageURL, // without chart options: one indexed page per repo
+		NoIndex:   repo.HeadCommit == "",
+	}
+	if repo.HeadCommit == "" {
+		m.Description = "Lines of code over time for " + name + "."
+		return m
+	}
+	var top []string
+	for _, l := range langs {
+		if l.Data || len(top) == 3 {
+			continue
+		}
+		top = append(top, l.Name)
+	}
+	m.Description = "Lines of code over time for " + name + ": " + chart.FormatCompact(total.Code) +
+		" lines of code across " + strconv.Itoa(repo.Commits) + " commits"
+	if len(top) > 0 {
+		m.Description += ", mostly " + strings.Join(top, ", ")
+	}
+	m.Description += ". Embeddable chart for your README."
+	return m
 }
 
 func since(t time.Time) string {

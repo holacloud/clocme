@@ -113,6 +113,23 @@ func (s *Service) Progress(id string) (Progress, bool) {
 	return p, ok
 }
 
+// Ready returns every repo with a chart (status ready, or a failed refresh of
+// a repo that still has a series).
+func (s *Service) Ready(ctx context.Context) ([]*model.Repo, error) {
+	all, err := s.repos.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ready := all[:0]
+	for _, r := range all {
+		if r.HeadCommit != "" && r.Status != model.StatusNotFound {
+			ready = append(ready, r)
+		}
+	}
+	sort.Slice(ready, func(i, j int) bool { return ready[i].Id.Id < ready[j].Id.Id })
+	return ready, nil
+}
+
 // Recent returns the most recently updated ready repos.
 func (s *Service) Recent(ctx context.Context, n int) ([]*model.Repo, error) {
 	all, err := s.repos.List(ctx)

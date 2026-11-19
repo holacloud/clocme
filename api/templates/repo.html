@@ -1,4 +1,4 @@
-{{template "head" (print .Repo.Owner "/" .Repo.Name " · lines of code · cloc.hola.cloud")}}
+{{template "head" .Meta}}
 
 <hgroup>
   <h1><a href="https://{{.Slug}}" class="contrast">{{.Repo.Owner}}/<strong>{{.Repo.Name}}</strong></a></h1>
@@ -108,8 +108,8 @@
   </div>
 </div>
 
-{{if .Languages}}
-<h3>Languages at <code>{{slice .Repo.HeadCommit 0 7}}</code></h3>
+{{if and .Languages .Repo.HeadCommit}}
+<h3>Languages at <code>{{short .Repo.HeadCommit}}</code></h3>
 <div class="overflow-auto">
 <table class="striped">
   <thead><tr><th>Language</th><th>Files</th><th>Code</th><th>Comments</th><th>Blanks</th><th>%</th></tr></thead>
