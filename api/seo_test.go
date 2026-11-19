@@ -13,6 +13,7 @@ import (
 	"github.com/holacloud/store"
 
 	"github.com/holacloud/clocme/model"
+	"github.com/holacloud/clocme/raster"
 	"github.com/holacloud/clocme/service"
 	"github.com/holacloud/clocme/telegram"
 )
@@ -26,7 +27,7 @@ func newTestAPI(t *testing.T, repos ...*model.Repo) *httptest.Server {
 		}
 	}
 	svc := service.New(rs, store.NewStoreMemory[model.Series](), store.NewStoreMemory[model.Owner](), nil, nil, telegram.New(telegram.Config{}), service.Options{RefreshInterval: time.Hour})
-	b, err := New(svc, "https://cloc.example", "test")
+	b, err := New(svc, raster.New(), "https://cloc.example", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +114,24 @@ func TestRepoPageMeta(t *testing.T) {
 	}
 	if strings.Contains(body, "noindex") {
 		t.Error("ready repo must be indexable")
+	}
+	for _, want := range []string{`<meta name="twitter:title" content="fulldump/box · lines of code · cloc.hola.cloud">`, `<meta property="og:site_name"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if raster.New().Available() {
+		for _, want := range []string{
+			`<meta name="twitter:card" content="summary_large_image">`,
+			`<meta property="og:image" content="https://cloc.example/github.com/fulldump/box.png?v=abcdef0">`,
+			`<meta property="og:image:width" content="1200">`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("missing %s", want)
+			}
+		}
+	} else if strings.Contains(body, "og:image") {
+		t.Error("og:image without rasterizer")
 	}
 
 	_, body = get(t, s.URL+"/github.com/someone/pending", googlebot...)

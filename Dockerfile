@@ -8,9 +8,10 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/holacloud/clo
 
 FROM alpine:3.22
 # git is required at runtime: clones and blob reads shell out to it.
+# rsvg-convert + a font render the PNG social previews (og:image).
 # safe.directory: the data volume may be owned by a different uid than the
 # one running the container (bind mounts) and git would refuse those repos.
-RUN apk add --no-cache git ca-certificates \
+RUN apk add --no-cache git ca-certificates rsvg-convert font-dejavu \
  && git config --system safe.directory '*' \
  && adduser -D -u 1000 clocme \
  && mkdir /data && chown clocme /data

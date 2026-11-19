@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 type langChip struct {
 	Name    string  `json:"name"`
 	Color   string  `json:"color"`
+	Icon    string  `json:"icon,omitempty"`
 	Percent float64 `json:"percent"`
 }
 
@@ -66,6 +68,17 @@ type ownerData struct {
 // topLanguages turns per-language stats into the biggest code languages
 // (data languages excluded) with their share of the total.
 func topLanguages(stats map[string]model.Stats, n int) ([]langChip, int64) {
+	chips, total := languageShares(stats, 0)
+	if len(chips) > n {
+		chips = chips[:n]
+	}
+	return chips, total
+}
+
+// languageShares returns every code language (data languages excluded) with
+// its share, biggest first. Languages under minPercent are grouped as "Other"
+// (last). Percentages have one decimal.
+func languageShares(stats map[string]model.Stats, minPercent float64) ([]langChip, int64) {
 	var total int64
 	var chips []langChip
 	for name, s := range stats {
@@ -73,16 +86,29 @@ func topLanguages(stats map[string]model.Stats, n int) ([]langChip, int64) {
 			continue
 		}
 		total += s.Code
-		chips = append(chips, langChip{Name: name, Color: chart.LanguageColor(name), Percent: float64(s.Code)})
+		chips = append(chips, langChip{Name: name, Color: chart.LanguageColor(name), Icon: langIcon(name), Percent: float64(s.Code)})
 	}
-	sort.Slice(chips, func(i, j int) bool { return chips[i].Percent > chips[j].Percent })
-	if len(chips) > n {
-		chips = chips[:n]
+	sort.Slice(chips, func(i, j int) bool {
+		if chips[i].Percent != chips[j].Percent {
+			return chips[i].Percent > chips[j].Percent
+		}
+		return chips[i].Name < chips[j].Name
+	})
+	var other float64
+	kept := chips[:0]
+	for _, c := range chips {
+		c.Percent = c.Percent * 100 / float64(total)
+		if minPercent > 0 && c.Percent < minPercent {
+			other += c.Percent
+			continue
+		}
+		c.Percent = math.Round(c.Percent*10) / 10
+		kept = append(kept, c)
 	}
-	for i := range chips {
-		chips[i].Percent = float64(int(chips[i].Percent*1000/float64(total))) / 10
+	if other > 0 {
+		kept = append(kept, langChip{Name: "Other", Color: chart.LanguageColor("Other"), Percent: math.Round(other*10) / 10})
 	}
-	return chips, total
+	return kept, total
 }
 
 func (a *API) buildOwnerView(r *http.Request, o *model.Owner) ownerView {
@@ -129,7 +155,7 @@ func (a *API) buildOwnerView(r *http.Request, o *model.Owner) ownerView {
 		}
 		v.Repos = append(v.Repos, rv)
 	}
-	v.Languages, v.Code = topLanguages(aggregate, 6)
+	v.Languages, v.Code = languageShares(aggregate, 1)
 	return v
 }
 
@@ -192,8 +218,8 @@ func ownerMeta(v ownerView, url string) pageMeta {
 		desc += ": " + chart.FormatCompact(v.Code) + " lines of code"
 	}
 	var langs []string
-	for i, l := range v.Languages {
-		if i == 3 {
+	for _, l := range v.Languages {
+		if len(langs) == 3 || l.Name == "Other" {
 			break
 		}
 		langs = append(langs, l.Name)
@@ -201,10 +227,22 @@ func ownerMeta(v ownerView, url string) pageMeta {
 	if len(langs) > 0 {
 		desc += ", mostly " + strings.Join(langs, ", ")
 	}
-	return pageMeta{
+	m := pageMeta{
 		Title:       v.Login + " · repositories · cloc.hola.cloud",
 		Description: desc + ".",
 		Canonical:   url,
 		NoIndex:     v.Ready == 0,
 	}
+	if v.AvatarURL != "" {
+		// GitHub avatars are square PNG/JPEG: "summary" card.
+		m.Image = v.AvatarURL
+		if strings.Contains(m.Image, "?") {
+			m.Image += "&s=400"
+		} else {
+			m.Image += "?s=400"
+		}
+		m.ImageWidth, m.ImageHeight = 400, 400
+		m.ImageAlt = "Avatar of " + v.Login
+	}
+	return m
 }

@@ -29,10 +29,15 @@ delayed by a big organization. Cards fill in as charts are ready.
 | `theme`   | `auto`, `light`, `dark`                  | `auto`    |
 | `w`, `h`  | size in px                               | `800x400` |
 | `title`, `legend` | `0` to hide                      | `1`       |
-| `format`  | `svg`, `html`, `json` (force response)   | negotiated|
+| `format`  | `svg`, `html`, `json`, `png` (force response) | negotiated|
 | `interactive` | `1`: embeds chart geometry (`data-layout`) and scopes CSS, used by the web page tooltip | `0` |
 
-Extensions also force the format: `/github.com/owner/repo.svg`, `.json`.
+Extensions also force the format: `/github.com/owner/repo.svg`, `.json`, `.png`.
+
+`.png` is the social preview (`og:image`, `twitter:image`): 1200x630, the
+chart laid out at 800x420 and scaled x1.5 so text stays readable in
+previews. It needs `rsvg-convert` (included in the docker image); without it
+PNG endpoints answer 501 and pages omit `og:image`.
 
 ## How it works
 
@@ -60,8 +65,10 @@ Content negotiation: HTML when `Accept` contains `text/html` and
 | `github.com/holacloud/store` | Persistence (disk JSON + memory cache) |
 | Vue 3.5.13 (vendored, `api/static/vendor`) | Dynamic parts of the page (option builder, status polling) |
 | Pico CSS 2.0.6 (vendored) | Classless CSS, built-in dark mode |
+| Devicon 2.16.0 icons (subset vendored, `api/static/icons/lang`, MIT) | Language icons in the language bar |
+| `rsvg-convert` (librsvg, system binary) | SVG to PNG for social previews; pure Go rasterizers do not render text |
 
-Runtime requirement: the `git` binary.
+Runtime requirements: `git`, and optionally `rsvg-convert` + a font for PNG previews.
 
 ## Run
 

@@ -21,6 +21,7 @@ import (
 	"github.com/holacloud/clocme/config"
 	"github.com/holacloud/clocme/githost"
 	"github.com/holacloud/clocme/model"
+	"github.com/holacloud/clocme/raster"
 	"github.com/holacloud/clocme/service"
 	"github.com/holacloud/clocme/telegram"
 )
@@ -73,7 +74,12 @@ func main() {
 		BaseURL:         c.BaseURL,
 	})
 
-	b, err := api.New(svc, c.BaseURL, config.VERSION)
+	rz := raster.New()
+	if !rz.Available() {
+		log.Println("rsvg-convert not found: PNG social previews (og:image) disabled")
+	}
+
+	b, err := api.New(svc, rz, c.BaseURL, config.VERSION)
 	if err != nil {
 		log.Fatalf("api: %v", err)
 	}

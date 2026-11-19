@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <style>text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans','DejaVu Sans',Helvetica,Arial,sans-serif}</style>
+  <rect width="1200" height="630" fill="#0d1117"/>
+  <!-- decorative stacked areas, language colors -->
+  <path d="M0,630 L0,560 C200,555 400,540 600,500 C800,460 1000,380 1200,300 L1200,630 Z" fill="#00ADD8"/>
+  <path d="M0,560 C200,555 400,540 600,500 C800,460 1000,380 1200,300 L1200,250 C1000,330 800,420 600,465 C400,505 200,525 0,535 Z" fill="#3178c6"/>
+  <path d="M0,535 C200,525 400,505 600,465 C800,420 1000,330 1200,250 L1200,215 C1000,295 800,390 600,440 C400,485 200,510 0,520 Z" fill="#f1e05a"/>
+  <path d="M0,520 C200,510 400,485 600,440 C800,390 1000,295 1200,215 L1200,195 C1000,272 800,370 600,424 C400,472 200,500 0,512 Z" fill="#e34c26"/>
+  <path d="M0,512 C200,500 400,472 600,424 C800,370 1000,272 1200,195 L1200,185 C1000,262 800,361 600,416 C400,465 200,494 0,507 Z" fill="#89e051"/>
+  <text x="80" y="150" font-size="76" font-weight="700" fill="#e6edf3">cloc<tspan fill="#8d96a0" font-weight="400">.hola.cloud</tspan></text>
+  <text x="80" y="215" font-size="36" fill="#c9d1d9">Lines of code over time, per language,</text>
+  <text x="80" y="262" font-size="36" fill="#c9d1d9">for any GitHub repository.</text>
+  <rect x="80" y="300" width="720" height="56" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="104" y="336" font-size="24" fill="#8d96a0" font-family="'DejaVu Sans Mono',Menlo,Consolas,monospace">cloc.hola.cloud/<tspan fill="#e6edf3">github.com/owner/repo</tspan></text>
+</svg>

@@ -15,11 +15,19 @@
   </header>
 
   <div v-if="languages.length" class="lang-bar" v-cloak>
-    <div class="bar">
-      <span v-for="l in languages" :style="{ width: l.percent + '%', background: l.color }" :title="l.name + ' ' + l.percent + '%'"></span>
+    <div class="bar" ref="bar" role="img" :aria-label="barLabel">
+      <span v-for="s in segments" :key="s.name" class="seg"
+            :style="{ flexGrow: s.percent, background: s.color, color: s.fg }"
+            :title="s.name + ' ' + s.percent + '%'">
+        <i v-if="s.showIcon" class="lang-icon" :style="{ maskImage: 'url(' + s.icon + ')', webkitMaskImage: 'url(' + s.icon + ')' }"></i>
+        <b v-if="s.showName">${ s.name }</b>
+        <small v-if="s.showPct">${ s.percent }%</small>
+      </span>
     </div>
-    <ul class="chips">
-      <li v-for="l in languages"><i :style="{ background: l.color }"></i>${ l.name } <small>${ l.percent }%</small></li>
+    <ul class="chips" v-if="legend.length">
+      <li v-for="s in legend" :key="s.name">
+        <i :style="{ background: s.color }"></i>${ s.name } <small>${ s.percent }%</small>
+      </li>
     </ul>
   </div>
 

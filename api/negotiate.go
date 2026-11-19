@@ -9,13 +9,14 @@ const (
 	FormatHTML = "html"
 	FormatSVG  = "svg"
 	FormatJSON = "json"
+	FormatPNG  = "png" // only when explicitly asked (extension or ?format=png)
 )
 
 // splitFormat removes a known extension from the repo segment:
 // "box.svg" -> ("box", "svg"). Repo names may legitimately contain dots
 // ("socket.io"), so only exact known extensions are stripped.
 func splitFormat(name string) (string, string) {
-	for _, f := range []string{FormatSVG, FormatJSON} {
+	for _, f := range []string{FormatSVG, FormatJSON, FormatPNG} {
 		if strings.HasSuffix(name, "."+f) && len(name) > len(f)+1 {
 			return strings.TrimSuffix(name, "."+f), f
 		}
@@ -30,7 +31,7 @@ func splitFormat(name string) (string, string) {
 //  3. anything else (<img>, GitHub camo proxy, curl...) -> SVG
 func negotiate(r *http.Request, ext string) string {
 	switch f := strings.ToLower(r.URL.Query().Get("format")); f {
-	case FormatHTML, FormatSVG, FormatJSON:
+	case FormatHTML, FormatSVG, FormatJSON, FormatPNG:
 		return f
 	}
 	if ext != "" {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/holacloud/clocme/chart"
 	"github.com/holacloud/clocme/model"
+	"github.com/holacloud/clocme/raster"
 	"github.com/holacloud/clocme/service"
 )
 
@@ -35,14 +36,16 @@ var templatesFS embed.FS
 
 type API struct {
 	svc       *service.Service
+	raster    *raster.Rasterizer
 	baseURL   string
 	version   string
 	templates *template.Template
 }
 
-func New(svc *service.Service, baseURL, version string) (*box.B, error) {
+func New(svc *service.Service, rz *raster.Rasterizer, baseURL, version string) (*box.B, error) {
 	a := &API{
 		svc:     svc,
+		raster:  rz,
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		version: version,
 	}
@@ -76,6 +79,7 @@ func New(svc *service.Service, baseURL, version string) (*box.B, error) {
 
 	b.HandleFunc("GET", "/", a.home)
 	b.HandleFunc("GET", "/go", a.goTo)
+	b.HandleFunc("GET", "/og.png", a.ogHome)
 	b.HandleFunc("GET", "/sitemap.xml", a.sitemap)
 	b.HandleFunc("GET", "/robots.txt", a.robots)
 	b.HandleFunc("GET", "/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
@@ -120,6 +124,14 @@ type pageMeta struct {
 	Description string
 	Canonical   string
 	NoIndex     bool
+
+	// Social preview (og:image / twitter:image). LargeImage selects the
+	// twitter "summary_large_image" card, otherwise "summary".
+	Image       string
+	ImageAlt    string
+	ImageWidth  int
+	ImageHeight int
+	LargeImage  bool
 }
 
 type homeData struct {
@@ -132,12 +144,17 @@ type homeData struct {
 }
 
 func (a *API) homeMeta(noIndex bool) pageMeta {
-	return pageMeta{
+	m := pageMeta{
 		Title:       "cloc.hola.cloud · lines of code history for your README",
 		Description: "Chart the lines of code of any public GitHub repository, per language, commit after commit, and embed it in your README with one line.",
 		Canonical:   a.baseURL + "/",
 		NoIndex:     noIndex,
 	}
+	if a.raster.Available() {
+		m.Image, m.ImageWidth, m.ImageHeight, m.LargeImage = a.baseURL+"/og.png", ogWidth, ogHeight, true
+		m.ImageAlt = "cloc.hola.cloud: lines of code over time for your README"
+	}
+	return m
 }
 
 func (a *API) home(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +233,8 @@ func (a *API) repo(w http.ResponseWriter, r *http.Request) {
 		a.repoJSON(w, r, repo)
 	case FormatHTML:
 		a.repoHTML(w, r, repo, opts)
+	case FormatPNG:
+		a.repoPNG(w, r, repo, opts)
 	default:
 		a.repoSVG(w, r, repo, opts)
 	}
@@ -240,8 +259,17 @@ func chartTitle(repo *model.Repo) string {
 	return repo.Owner + "/" + repo.Name
 }
 
-func (a *API) repoSVG(w http.ResponseWriter, r *http.Request, repo *model.Repo, opts chart.Options) {
+// chartETag identifies a rendered chart: same head + same options = same image.
+func chartETag(repo *model.Repo, opts chart.Options, format string) string {
+	h := sha1.Sum([]byte(format + "|" + repo.HeadCommit + "|" + opts.Query().Encode() + "|" + repo.Owner + "/" + repo.Name))
+	return `"` + hex.EncodeToString(h[:10]) + `"`
+}
+
+// renderChart renders the chart of a repo, or a message card when there is
+// nothing to draw yet. cacheable is false for placeholders and errors.
+func (a *API) renderChart(r *http.Request, repo *model.Repo, opts chart.Options) (svg []byte, cacheable bool, err error) {
 	title := chartTitle(repo)
+	buf := &bytes.Buffer{}
 
 	if repo.HeadCommit == "" { // nothing to draw yet
 		var msg string
@@ -255,33 +283,122 @@ func (a *API) repoSVG(w http.ResponseWriter, r *http.Request, repo *model.Repo, 
 		default:
 			msg = "Counting lines of code… reload in a minute"
 		}
-		writeSVG(w, "no-cache, no-store, must-revalidate", func(buf *bytes.Buffer) error {
-			return chart.RenderMessage(buf, title, msg, opts)
-		})
-		return
-	}
-
-	// Cheap conditional request: same head + same options = same image.
-	h := sha1.Sum([]byte(repo.HeadCommit + "|" + opts.Query().Encode() + "|" + repo.Owner + "/" + repo.Name))
-	etag := `"` + hex.EncodeToString(h[:10]) + `"`
-	w.Header().Set("ETag", etag)
-	if r.Header.Get("If-None-Match") == etag {
-		w.WriteHeader(http.StatusNotModified)
-		return
+		err := chart.RenderMessage(buf, title, msg, opts)
+		return buf.Bytes(), false, err
 	}
 
 	points, err := a.svc.Series(r.Context(), repo.Id.Id)
 	if err != nil {
 		log.Printf("series %s: %v", repo.Id.Id, err)
-		writeSVG(w, "no-cache", func(buf *bytes.Buffer) error {
-			return chart.RenderMessage(buf, title, "Temporary error, try again later", opts)
-		})
+		err := chart.RenderMessage(buf, title, "Temporary error, try again later", opts)
+		return buf.Bytes(), false, err
+	}
+	err = chart.Render(buf, title+" · lines of code", points, opts)
+	return buf.Bytes(), true, err
+}
+
+func (a *API) repoSVG(w http.ResponseWriter, r *http.Request, repo *model.Repo, opts chart.Options) {
+	etag := chartETag(repo, opts, FormatSVG)
+	if repo.HeadCommit != "" {
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	svg, cacheable, err := a.renderChart(r, repo, opts)
+	cc := "public, max-age=1800"
+	if !cacheable {
+		cc = "no-cache, no-store, must-revalidate"
+		w.Header().Del("ETag")
+	}
+	writeSVG(w, cc, func(buf *bytes.Buffer) error {
+		if err != nil {
+			return err
+		}
+		_, werr := buf.Write(svg)
+		return werr
+	})
+}
+
+// Social preview size recommended by Facebook, X and LinkedIn.
+const ogWidth, ogHeight = 1200, 630
+
+// pngOptions adapts chart options for a raster social preview and returns
+// the raster size. By default the chart is laid out at 800x420 and scaled
+// x1.5 to 1200x630: previews are shown at ~500px wide, so everything (text
+// included) must be bigger than in a README. Theme is fixed (there is no
+// prefers-color-scheme in a PNG).
+func pngOptions(r *http.Request, opts chart.Options) (chart.Options, int, int) {
+	q := r.URL.Query()
+	w, h := opts.Width, opts.Height
+	if q.Get("w") == "" && q.Get("h") == "" {
+		opts.Width, opts.Height = 800, 420
+		w, h = ogWidth, ogHeight
+	}
+	if opts.Theme == chart.ThemeAuto {
+		opts.Theme = chart.ThemeLight
+	}
+	return opts, w, h
+}
+
+func (a *API) repoPNG(w http.ResponseWriter, r *http.Request, repo *model.Repo, opts chart.Options) {
+	if !a.raster.Available() {
+		http.Error(w, "PNG rendering is not available", http.StatusNotImplemented)
 		return
 	}
+	opts, pw, ph := pngOptions(r, opts)
+	etag := chartETag(repo, opts, FormatPNG)
+	if repo.HeadCommit != "" && r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	svg, cacheable, err := a.renderChart(r, repo, opts)
+	if err != nil {
+		log.Println("render chart:", err)
+		http.Error(w, "render error", http.StatusInternalServerError)
+		return
+	}
+	key := ""
+	if cacheable {
+		key = etag
+	}
+	png, err := a.raster.PNG(r.Context(), key, svg, pw, ph)
+	if err != nil {
+		log.Println("png:", err)
+		http.Error(w, "render error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	if cacheable {
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	w.Write(png)
+}
 
-	writeSVG(w, "public, max-age=1800", func(buf *bytes.Buffer) error {
-		return chart.Render(buf, title+" · lines of code", points, opts)
-	})
+// ogHome is the social preview of the home page.
+func (a *API) ogHome(w http.ResponseWriter, r *http.Request) {
+	if !a.raster.Available() {
+		http.Error(w, "PNG rendering is not available", http.StatusNotImplemented)
+		return
+	}
+	svg, err := staticFS.ReadFile("static/og-home.svg")
+	if err != nil {
+		http.Error(w, "render error", http.StatusInternalServerError)
+		return
+	}
+	png, err := a.raster.PNG(r.Context(), "og-home|"+a.version, svg, ogWidth, ogHeight)
+	if err != nil {
+		log.Println("og png:", err)
+		http.Error(w, "render error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(png)
 }
 
 func writeSVG(w http.ResponseWriter, cacheControl string, fn func(buf *bytes.Buffer) error) {
@@ -382,6 +499,12 @@ func (a *API) repoHTML(w http.ResponseWriter, r *http.Request, repo *model.Repo,
 	}
 
 	data.Meta = repoMeta(repo, pageURL, data.Total, data.Languages)
+	if repo.HeadCommit != "" && a.raster.Available() {
+		// ?v= changes with every new analysis, so social caches refresh.
+		data.Meta.Image = pageURL + ".png?v=" + repo.HeadCommit[:min(7, len(repo.HeadCommit))]
+		data.Meta.ImageWidth, data.Meta.ImageHeight, data.Meta.LargeImage = ogWidth, ogHeight, true
+		data.Meta.ImageAlt = "Lines of code over time of " + repo.Owner + "/" + repo.Name + ", per language"
+	}
 
 	oj, _ := json.Marshal(map[string]any{
 		"slug":     slug,

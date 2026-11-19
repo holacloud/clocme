@@ -12,6 +12,7 @@ import (
 
 	"github.com/holacloud/clocme/githost"
 	"github.com/holacloud/clocme/model"
+	"github.com/holacloud/clocme/raster"
 	"github.com/holacloud/clocme/service"
 	"github.com/holacloud/clocme/telegram"
 )
@@ -37,7 +38,7 @@ func TestOwnerPage(t *testing.T) {
 	ready := testRepo("acme", "rocket", model.StatusReady, "abcdef0123")
 	rs.Put(context.Background(), ready)
 	svc := service.New(rs, store.NewStoreMemory[model.Series](), store.NewStoreMemory[model.Owner](), nil, fakeOwnerHost{}, telegram.New(telegram.Config{}), service.Options{RefreshInterval: time.Hour})
-	b, err := New(svc, "https://cloc.example", "test")
+	b, err := New(svc, raster.New(), "https://cloc.example", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
