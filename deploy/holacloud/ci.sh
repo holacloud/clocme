@@ -135,8 +135,14 @@ if ! compose build; then
   exit 1
 fi
 
+# --force recreates the container even if image and compose did not change:
+# that is how config.json changes are applied (a plain `up -d` would keep the
+# running container, and a restart could keep seeing a replaced file).
+UP_FLAGS=(-d --remove-orphans)
+[ "${FORCE}" == "YES" ] && UP_FLAGS+=(--force-recreate)
+
 echo "$(date) Starting ${VERSION}..."
-if ! compose up -d --remove-orphans; then
+if ! compose up "${UP_FLAGS[@]}"; then
   notify "start failed! ${REPO}:${BRANCH} ${VERSION}"
   exit 1
 fi

@@ -9,12 +9,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
 type Config struct {
 	BaseURL string `json:"base_url" usage:"Telegram API base URL (default https://api.telegram.org)"`
-	Bot     string `json:"bot" usage:"Telegram bot path segment, e.g. bot123456:ABC..."`
+	Bot     string `json:"bot" usage:"Telegram bot token, e.g. 123456:ABC... (a leading \"bot\" is accepted too)"`
 	Chat    string `json:"chat" usage:"Telegram chat ID"`
 }
 
@@ -26,6 +27,11 @@ type Telegram struct {
 func New(c Config) *Telegram {
 	if c.BaseURL == "" {
 		c.BaseURL = "https://api.telegram.org"
+	}
+	// The API path is /bot<token>/...: accept the token with or without the
+	// prefix (ci.env uses it without).
+	if c.Bot != "" && !strings.HasPrefix(c.Bot, "bot") {
+		c.Bot = "bot" + c.Bot
 	}
 	return &Telegram{config: c, client: &http.Client{Timeout: 10 * time.Second}}
 }
