@@ -98,6 +98,12 @@ directory (`/app` in the container). Keys are the `json` tags of
 variables in docker-compose or they will override the file. `data_dir` and
 `addr` are fixed by the image (`/data`, `:8080`).
 
+Logs are structured with `log/slog`: one JSON object per line by default
+(`"log_format": "text"` for key=value, handier locally). Requests are logged
+as `"msg":"http"` with `method`, `path`, `status`, `type`, `bytes`,
+`dur_ms`, `ip`, `ua`, `accept` and `dest` (5xx as `ERROR`); `/healthz` is
+not logged.
+
 Logs always go to stderr (`make logs`). To also ship them to
 [instantlogs.io](https://instantlogs.io), fill the `instantlogs` section of
 `config.json` (`logger_id`, `api_key`, `api_secret`; `endpoint` optional for a

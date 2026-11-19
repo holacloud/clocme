@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -40,13 +40,13 @@ func New(c Config) *Telegram {
 func (t *Telegram) Send(text string) {
 	go func() {
 		if err := t.SendSync(text); err != nil {
-			log.Println("TELEGRAM ERROR:", err)
+			slog.Error("telegram send failed", "err", err)
 		}
 	}()
 }
 
 func (t *Telegram) SendSync(text string) error {
-	log.Println("TELEGRAM:", text)
+	slog.Info("telegram", "text", text)
 	if t == nil || t.config.Bot == "" || t.config.Chat == "" {
 		return nil
 	}

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"sort"
@@ -177,7 +177,7 @@ func (a *API) owner(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, githost.ErrNotFound) {
 			msg = "GitHub user or organization '" + login + "' not found"
 		} else if !strings.HasPrefix(msg, "invalid") {
-			log.Printf("owner %s/%s: %v", host, login, err)
+			slog.Error("list owner", "owner", host+"/"+login, "err", err)
 			msg = "Could not list the repositories of '" + login + "' right now, try again later"
 		}
 		a.notFound(w, r, format, opts, host+"/"+login, msg)

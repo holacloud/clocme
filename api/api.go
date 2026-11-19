@@ -12,7 +12,7 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"sort"
@@ -100,7 +100,7 @@ func New(svc *service.Service, rz *raster.Rasterizer, baseURL, version string) (
 func (a *API) render(w http.ResponseWriter, status int, name string, data any) {
 	buf := &bytes.Buffer{}
 	if err := a.templates.ExecuteTemplate(buf, name, data); err != nil {
-		log.Printf("template %s: %v", name, err)
+		slog.Error("template", "template", name, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -151,7 +151,7 @@ func (a *API) homeMeta(noIndex bool) pageMeta {
 func (a *API) home(w http.ResponseWriter, r *http.Request) {
 	recent, err := a.svc.Recent(r.Context(), 12)
 	if err != nil {
-		log.Println("recent:", err)
+		slog.Error("recent repos", "err", err)
 	}
 	a.render(w, http.StatusOK, "home.html", homeData{Meta: a.homeMeta(false), BaseURL: a.baseURL, Version: a.version, Recent: recent})
 }
@@ -280,7 +280,7 @@ func (a *API) renderChart(r *http.Request, repo *model.Repo, opts chart.Options)
 
 	points, err := a.svc.Series(r.Context(), repo.Id.Id)
 	if err != nil {
-		log.Printf("series %s: %v", repo.Id.Id, err)
+		slog.Error("load series", "repo", repo.Id.Id, "err", err)
 		err := chart.RenderMessage(buf, title, "Temporary error, try again later", opts)
 		return buf.Bytes(), false, err
 	}
@@ -346,7 +346,7 @@ func (a *API) repoPNG(w http.ResponseWriter, r *http.Request, repo *model.Repo, 
 	}
 	svg, cacheable, err := a.renderChart(r, repo, opts)
 	if err != nil {
-		log.Println("render chart:", err)
+		slog.Error("render chart", "repo", repo.Id.Id, "err", err)
 		http.Error(w, "render error", http.StatusInternalServerError)
 		return
 	}
@@ -356,7 +356,7 @@ func (a *API) repoPNG(w http.ResponseWriter, r *http.Request, repo *model.Repo, 
 	}
 	png, err := a.raster.PNG(r.Context(), key, svg, pw, ph)
 	if err != nil {
-		log.Println("png:", err)
+		slog.Error("render png", "repo", repo.Id.Id, "err", err)
 		http.Error(w, "render error", http.StatusInternalServerError)
 		return
 	}
@@ -383,7 +383,7 @@ func (a *API) ogHome(w http.ResponseWriter, r *http.Request) {
 	}
 	png, err := a.raster.PNG(r.Context(), "og-home|"+a.version, svg, ogWidth, ogHeight)
 	if err != nil {
-		log.Println("og png:", err)
+		slog.Error("render og png", "err", err)
 		http.Error(w, "render error", http.StatusInternalServerError)
 		return
 	}
@@ -395,7 +395,7 @@ func (a *API) ogHome(w http.ResponseWriter, r *http.Request) {
 func writeSVG(w http.ResponseWriter, cacheControl string, fn func(buf *bytes.Buffer) error) {
 	buf := &bytes.Buffer{}
 	if err := fn(buf); err != nil {
-		log.Println("render svg:", err)
+		slog.Error("render svg", "err", err)
 		http.Error(w, "render error", http.StatusInternalServerError)
 		return
 	}

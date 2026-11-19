@@ -25,6 +25,7 @@ type Config struct {
 
 	// Logs always go to stderr (docker logs); with a logger_id they are also
 	// shipped to instantlogs.io.
+	LogFormat   string         `json:"log_format" usage:"Log format: json (structured, one object per line) or text"`
 	Instantlogs logship.Config `json:"instantlogs"`
 
 	ShowConfig bool `json:"show_config" usage:"Print config and exit"`
@@ -42,5 +43,6 @@ func Default() *Config {
 		Workers:               1,
 		MaxOwnerRepos:         300,
 		AnalyzeTimeoutMinutes: 30,
+		LogFormat:             "json",
 	}
 }

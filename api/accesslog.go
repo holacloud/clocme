@@ -1,10 +1,9 @@
 package api
 
 import (
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -32,11 +31,15 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// accessLog logs one line per request with what was asked (user agent,
-// Accept, Sec-Fetch-Dest: the inputs of the content negotiation) and what
-// was served (status, content type, size), e.g.
+// accessLog logs one structured entry per request with what was asked (user
+// agent, Accept, Sec-Fetch-Dest: the inputs of the content negotiation) and
+// what was served (status, content type, size), e.g. with the JSON handler:
 //
-//	GET /github.com/a/b 200 text/html 18.2KB 2.1ms ip=1.2.3.4 ua="LinkedInBot/1.0 ..." accept="*/*" dest=""
+//	{"time":"...","level":"INFO","msg":"http","method":"GET","path":"/github.com/a/b",
+//	 "status":200,"type":"text/html","bytes":18634,"dur_ms":2.1,"ip":"1.2.3.4",
+//	 "ua":"LinkedInBot/1.0 ...","accept":"*/*","dest":""}
+//
+// 5xx responses are logged as errors.
 func accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
@@ -56,10 +59,22 @@ func accessLog(next http.Handler) http.Handler {
 		if status == 0 {
 			status = http.StatusOK
 		}
-		log.Printf("%s %s %d %s %s %s ip=%s ua=%q accept=%q dest=%q",
-			r.Method, r.URL.RequestURI(), status, ctype, humanBytes(rec.bytes),
-			time.Since(start).Round(time.Microsecond), clientIP(r),
-			r.Header.Get("User-Agent"), r.Header.Get("Accept"), r.Header.Get("Sec-Fetch-Dest"))
+		level := slog.LevelInfo
+		if status >= 500 {
+			level = slog.LevelError
+		}
+		slog.LogAttrs(r.Context(), level, "http",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.RequestURI()),
+			slog.Int("status", status),
+			slog.String("type", ctype),
+			slog.Int("bytes", rec.bytes),
+			slog.Float64("dur_ms", float64(time.Since(start).Microseconds())/1000),
+			slog.String("ip", clientIP(r)),
+			slog.String("ua", r.Header.Get("User-Agent")),
+			slog.String("accept", r.Header.Get("Accept")),
+			slog.String("dest", r.Header.Get("Sec-Fetch-Dest")),
+		)
 	})
 }
 
@@ -77,15 +92,4 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
-}
-
-func humanBytes(n int) string {
-	switch {
-	case n >= 1<<20:
-		return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + "MB"
-	case n >= 1<<10:
-		return strconv.FormatFloat(float64(n)/(1<<10), 'f', 1, 64) + "KB"
-	default:
-		return strconv.Itoa(n) + "B"
-	}
 }

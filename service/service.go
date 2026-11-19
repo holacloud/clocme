@@ -15,7 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -281,7 +281,7 @@ func (s *Service) Run(ctx context.Context) {
 func (s *Service) recoverInterrupted(ctx context.Context) {
 	all, err := s.repos.List(ctx)
 	if err != nil {
-		log.Println("recover:", err)
+		slog.Error("recover queue", "err", err)
 		return
 	}
 	for _, r := range all {
@@ -346,7 +346,7 @@ func (s *Service) next(ctx context.Context) string {
 
 	all, err := s.repos.List(ctx)
 	if err != nil {
-		log.Println("list repos:", err)
+		slog.Error("list repos", "err", err)
 		return ""
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].CheckedAt.Before(all[j].CheckedAt) })
@@ -382,7 +382,7 @@ func (s *Service) process(parent context.Context, id string) {
 	started := time.Now()
 	err := s.processRepo(ctx, id)
 	if err != nil {
-		log.Printf("repo %s: %v (%s)", id, err, time.Since(started).Round(time.Millisecond))
+		slog.Warn("repo analysis failed", "repo", id, "err", err, "dur_ms", time.Since(started).Milliseconds())
 		_, uerr := s.update(parent, id, func(r *model.Repo) error {
 			r.CheckedAt = time.Now()
 			if errors.Is(err, githost.ErrNotFound) {
@@ -395,11 +395,11 @@ func (s *Service) process(parent context.Context, id string) {
 			return nil
 		})
 		if uerr != nil {
-			log.Printf("repo %s: saving error: %v", id, uerr)
+			slog.Error("save repo error", "repo", id, "err", uerr)
 		}
 		return
 	}
-	log.Printf("repo %s: done (%s)", id, time.Since(started).Round(time.Millisecond))
+	slog.Info("repo analyzed", "repo", id, "dur_ms", time.Since(started).Milliseconds())
 }
 
 func (s *Service) processRepo(ctx context.Context, id string) error {

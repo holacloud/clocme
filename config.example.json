@@ -7,6 +7,7 @@
   "workers": 1,
   "max_owner_repos": 300,
   "analyze_timeout_minutes": 30,
+  "log_format": "json",
   "telegram": {
     "bot": "",
     "chat": ""

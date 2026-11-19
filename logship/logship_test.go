@@ -2,6 +2,7 @@ package logship
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,7 +46,7 @@ func (i *ingest) all() string {
 func newTestShipper(url string) *Shipper {
 	s := newShipper(Config{Endpoint: url, ApiKey: "k", ApiSecret: "s"}, 1000)
 	s.interval = 10 * time.Millisecond
-	s.errOut = io.Discard
+	s.logger = slog.New(slog.DiscardHandler)
 	return s
 }
 
@@ -121,7 +122,7 @@ func TestDropsOldestWhenFullAndReports(t *testing.T) {
 	defer srv.Close()
 	s := newShipper(Config{Endpoint: srv.URL}, 2)
 	s.interval = 10 * time.Millisecond
-	s.errOut = io.Discard
+	s.logger = slog.New(slog.DiscardHandler)
 
 	s.Write([]byte("oldest\n"))
 	s.Write([]byte("old\n"))
@@ -132,7 +133,7 @@ func TestDropsOldestWhenFullAndReports(t *testing.T) {
 
 	waitFor(t, func() bool { return strings.Contains(in.all(), "newest\n") })
 	got := in.all()
-	if !strings.Contains(got, "dropped 2 old log lines") || strings.Contains(got, "oldest") || strings.Contains(got, "old\n") {
+	if !strings.Contains(got, `"dropped":2`) || strings.Contains(got, "oldest") || strings.Contains(got, "old\n") {
 		t.Fatalf("got %q", got)
 	}
 	if !strings.HasSuffix(got, "new\nnewest\n") {
@@ -146,7 +147,7 @@ func TestPendingBatchIsDroppedWhenQueueFills(t *testing.T) {
 	srv := httptest.NewServer(in)
 	defer srv.Close()
 	s := newShipper(Config{Endpoint: srv.URL}, 2)
-	s.errOut = io.Discard
+	s.logger = slog.New(slog.DiscardHandler)
 
 	s.Write([]byte("b1\n"))
 	s.Write([]byte("b2\n"))
@@ -163,7 +164,7 @@ func TestPendingBatchIsDroppedWhenQueueFills(t *testing.T) {
 		}
 	}
 	got := in.all()
-	if strings.Contains(got, "b1") || !strings.Contains(got, "dropped 2 old log lines") || !strings.HasSuffix(got, "n1\nn2\n") {
+	if strings.Contains(got, "b1") || !strings.Contains(got, `"dropped":2`) || !strings.HasSuffix(got, "n1\nn2\n") {
 		t.Fatalf("got %q", got)
 	}
 }

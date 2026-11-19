@@ -16,8 +16,9 @@
 //   - When the endpoint fails, the batch is kept and retried with backoff.
 //     If the queue fills up meanwhile, the pending batch is the oldest data
 //     and is dropped first.
-//   - logship never logs through the standard logger (it would feed itself),
-//     its own errors go straight to stderr.
+//   - logship never logs through the default logger (it would feed itself):
+//     its own errors go to a logger that writes to stderr only, in the same
+//     format as the service logs (see SetHandler).
 package logship
 
 import (
@@ -25,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -57,7 +59,8 @@ type Shipper struct {
 	apiSecret string
 	client    *http.Client
 	interval  time.Duration
-	errOut    io.Writer
+	logger    *slog.Logger                 // logship's own errors (stderr only)
+	handler   func(io.Writer) slog.Handler // format of logs written by logship
 
 	lines   chan string
 	dropped atomic.Int64 // entries dropped and not reported yet
@@ -93,10 +96,22 @@ func newShipper(c Config, queueSize int) *Shipper {
 		apiSecret: c.ApiSecret,
 		client:    &http.Client{Timeout: 10 * time.Second},
 		interval:  defaultInterval,
-		errOut:    os.Stderr,
+		logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		handler:   func(w io.Writer) slog.Handler { return slog.NewJSONHandler(w, nil) },
 		lines:     make(chan string, queueSize),
 		stopped:   make(chan struct{}),
 	}
+}
+
+// SetHandler sets the log format used by logship itself (its errors, to
+// stderr only, and the "dropped lines" notices it ships), so they look like
+// the rest of the service logs. Call it before writing.
+func (s *Shipper) SetHandler(newHandler func(io.Writer) slog.Handler) {
+	if s == nil {
+		return
+	}
+	s.handler = newHandler
+	s.logger = slog.New(newHandler(os.Stderr))
 }
 
 func (s *Shipper) start() {
@@ -140,7 +155,7 @@ func (s *Shipper) loop(ctx context.Context) {
 		more, err := s.flush(ctx)
 		switch {
 		case err != nil:
-			fmt.Fprintf(s.errOut, "logship: %v (retrying in %s)\n", err, backoff)
+			s.logger.Warn("logship: send failed", "err", err, "retry_in", backoff.String())
 			timer.Reset(backoff)
 			backoff = min(backoff*2, maxBackoff)
 		case more:
@@ -167,7 +182,7 @@ func (s *Shipper) flush(ctx context.Context) (more bool, err error) {
 	if s.pending == nil {
 		s.body.Reset()
 		if d := s.dropped.Swap(0); d > 0 {
-			fmt.Fprintf(&s.body, "logship: dropped %d old log lines while %s was unreachable\n", d, s.endpoint)
+			slog.New(s.handler(&s.body)).Warn("logship: dropped old log lines", "dropped", d, "endpoint", s.endpoint)
 		}
 		n := 0
 	drain:
@@ -228,7 +243,7 @@ func (s *Shipper) Close(timeout time.Duration) {
 	for {
 		more, err := s.flush(ctx)
 		if err != nil {
-			fmt.Fprintf(s.errOut, "logship: final flush: %v\n", err)
+			s.logger.Warn("logship: final flush failed", "err", err)
 			return
 		}
 		if !more {

@@ -2,18 +2,25 @@ package api
 
 import (
 	"bytes"
-	"log"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"strings"
 	"testing"
 )
 
+// captureLogs sends the default slog logger to a JSON buffer during a test.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
 func TestAccessLog(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer log.SetOutput(os.Stderr)
+	buf := captureLogs(t)
 
 	h := accessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -25,11 +32,22 @@ func TestAccessLog(t *testing.T) {
 	r.Header.Set("X-Forwarded-For", "1.2.3.4, 10.0.0.1")
 	h.ServeHTTP(httptest.NewRecorder(), r)
 
-	line := buf.String()
-	for _, want := range []string{`GET /github.com/a/b?x=1 200 text/html 2.0KB `, `ip=1.2.3.4 `, `ua="LinkedInBot/1.0"`, `accept="*/*"`, `dest=""`} {
-		if !strings.Contains(line, want) {
-			t.Errorf("missing %q in %q", want, line)
+	var e map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &e); err != nil {
+		t.Fatalf("not a JSON line: %v: %s", err, buf)
+	}
+	want := map[string]any{
+		"level": "INFO", "msg": "http", "method": "GET", "path": "/github.com/a/b?x=1",
+		"status": 200.0, "type": "text/html", "bytes": 2048.0, "ip": "1.2.3.4",
+		"ua": "LinkedInBot/1.0", "accept": "*/*", "dest": "",
+	}
+	for k, v := range want {
+		if e[k] != v {
+			t.Errorf("%s = %v, want %v", k, e[k], v)
 		}
+	}
+	if _, ok := e["dur_ms"].(float64); !ok {
+		t.Errorf("dur_ms missing: %v", e)
 	}
 
 	buf.Reset()
@@ -39,9 +57,10 @@ func TestAccessLog(t *testing.T) {
 	}
 
 	buf.Reset()
-	h = accessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotModified) }))
+	h = accessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
-	if !strings.Contains(buf.String(), "GET /x 304 - 0B ") {
-		t.Errorf("got %q", buf.String())
+	json.Unmarshal(buf.Bytes(), &e)
+	if e["level"] != "ERROR" || e["status"] != 502.0 || e["type"] != "-" {
+		t.Errorf("5xx entry: %v", e)
 	}
 }

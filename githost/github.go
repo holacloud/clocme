@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -162,7 +162,7 @@ func (g *Github) getJSON(ctx context.Context, u string, v any) (*http.Response, 
 		return nil, err
 	}
 	if g.Token != "" && tokenRejected(resp.StatusCode, body) {
-		log.Printf("github api: token rejected for %s (status %d), retrying anonymously: %s", u, resp.StatusCode, strings.TrimSpace(string(body)))
+		slog.Warn("github api: token rejected, retrying anonymously", "url", u, "status", resp.StatusCode, "body", strings.TrimSpace(string(body)))
 		if resp, body, err = g.get(ctx, u, ""); err != nil {
 			return nil, err
 		}

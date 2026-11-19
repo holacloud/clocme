@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,27 +45,35 @@ func main() {
 		return
 	}
 
-	// Before anything else logs: optionally ship logs to instantlogs as well.
+	// Structured logging (log/slog) to stderr and, optionally, instantlogs.
+	// slog.SetDefault also routes the classic log package (net/http, box...)
+	// through the same handler.
+	var out io.Writer = os.Stderr
 	shipper := logship.New(c.Instantlogs)
 	if shipper != nil {
-		log.SetOutput(io.MultiWriter(os.Stderr, shipper))
-		log.Println("shipping logs to instantlogs")
+		out = io.MultiWriter(os.Stderr, shipper)
+		// logship's own logs in the same format (its errors go to stderr only)
+		shipper.SetHandler(func(w io.Writer) slog.Handler { return newLogHandler(c.LogFormat, w) })
+	}
+	slog.SetDefault(slog.New(newLogHandler(c.LogFormat, out)))
+	if shipper != nil {
+		slog.Info("shipping logs to instantlogs")
 	}
 
 	// Metadata is small and read on every request: disk + memory cache.
 	repos, err := store.NewStoreDiskCached[model.Repo](filepath.Join(c.DataDir, "repos"))
 	if err != nil {
-		log.Fatalf("repos store: %v", err)
+		fatal("repos store", err)
 	}
 	// Series can be big: disk only, read on demand.
 	series, err := store.NewStoreDisk[model.Series](filepath.Join(c.DataDir, "series"))
 	if err != nil {
-		log.Fatalf("series store: %v", err)
+		fatal("series store", err)
 	}
 
 	owners, err := store.NewStoreDiskCached[model.Owner](filepath.Join(c.DataDir, "owners"))
 	if err != nil {
-		log.Fatalf("owners store: %v", err)
+		fatal("owners store", err)
 	}
 
 	a := analyzer.New(analyzer.Config{
@@ -86,12 +95,12 @@ func main() {
 
 	rz := raster.New()
 	if !rz.Available() {
-		log.Println("rsvg-convert not found: PNG social previews (og:image) disabled")
+		slog.Warn("rsvg-convert not found: PNG social previews (og:image) disabled")
 	}
 
 	b, err := api.New(svc, rz, c.BaseURL, config.VERSION)
 	if err != nil {
-		log.Fatalf("api: %v", err)
+		fatal("api", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -111,14 +120,28 @@ func main() {
 		server.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("clocme %s listening on %s", config.VERSION, c.Addr)
+	slog.Info("listening", "version", config.VERSION, "addr", c.Addr)
 	err = server.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Println(err)
+		slog.Error("http server", "err", err)
 	}
-	log.Println("bye")
+	slog.Info("bye")
 	shipper.Close(5 * time.Second) // deliver the last lines
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		os.Exit(1)
 	}
+}
+
+// newLogHandler returns the slog handler for the configured format: JSON
+// (default, one object per line) or text (key=value, easier to read locally).
+func newLogHandler(format string, w io.Writer) slog.Handler {
+	if strings.EqualFold(format, "text") {
+		return slog.NewTextHandler(w, nil)
+	}
+	return slog.NewJSONHandler(w, nil)
+}
+
+func fatal(msg string, err error) {
+	slog.Error(msg, "err", err)
+	os.Exit(1)
 }

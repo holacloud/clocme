@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -71,7 +71,7 @@ func (s *Service) refreshOwnerAsync(host, login, id string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		if _, err := s.listOwner(ctx, host, login, id); err != nil {
-			log.Printf("owner %s: refresh: %v", id, err)
+			slog.Warn("owner refresh failed", "owner", id, "err", err)
 		}
 	}()
 }
@@ -121,9 +121,9 @@ func (s *Service) listOwner(ctx context.Context, host, login, id string) (*model
 	sort.SliceStable(byStars, func(i, j int) bool { return byStars[i].Stars > byStars[j].Stars })
 	for _, r := range byStars {
 		if _, err := s.register(ctx, host, o.Login, r.Name, true); err != nil {
-			log.Printf("owner %s: register %s: %v", id, r.Name, err)
+			slog.Warn("owner register repo", "owner", id, "repo", r.Name, "err", err)
 		}
 	}
-	log.Printf("owner %s: listed %d repos", id, len(o.Repos))
+	slog.Info("owner listed", "owner", id, "repos", len(o.Repos))
 	return o, nil
 }

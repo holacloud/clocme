@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/xml"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -25,7 +25,7 @@ type sitemapURLSet struct {
 func (a *API) sitemap(w http.ResponseWriter, r *http.Request) {
 	repos, err := a.svc.Ready(r.Context())
 	if err != nil {
-		log.Println("sitemap:", err)
+		slog.Error("sitemap", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -35,7 +35,7 @@ func (a *API) sitemap(w http.ResponseWriter, r *http.Request) {
 
 	owners, err := a.svc.Owners(r.Context())
 	if err != nil {
-		log.Println("sitemap owners:", err)
+		slog.Error("sitemap owners", "err", err)
 	}
 	for _, o := range owners {
 		set.URLs = append(set.URLs, sitemapURL{Loc: a.baseURL + "/" + o.Slug(), LastMod: o.ListedAt.UTC().Format(time.RFC3339)})
@@ -57,7 +57,7 @@ func (a *API) sitemap(w http.ResponseWriter, r *http.Request) {
 	enc := xml.NewEncoder(w)
 	enc.Indent("", "  ")
 	if err := enc.Encode(set); err != nil {
-		log.Println("sitemap encode:", err)
+		slog.Error("sitemap encode", "err", err)
 	}
 }
 
