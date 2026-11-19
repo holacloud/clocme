@@ -9,8 +9,9 @@
 //   - Write never blocks: lines go to a bounded in-memory buffer and are
 //     sent in batches every second by a background goroutine.
 //   - When the endpoint is down, batches are kept and retried with backoff;
-//     if the buffer fills up, new lines are dropped (and the drop is
-//     reported once delivery resumes) instead of slowing down the service.
+//     if the buffer fills up, the OLDEST lines are dropped to make room for
+//     the new ones (like the instantlogs client), and the drop is reported
+//     once delivery resumes. The service is never slowed down.
 //   - logship never logs through the standard logger (it would feed itself),
 //     its own errors go straight to stderr.
 package logship
@@ -98,13 +99,26 @@ func (s *Shipper) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	s.mu.Lock()
-	if s.buf.Len()+len(p) > s.maxBuffer {
-		s.dropped += max(1, bytes.Count(p, []byte{'\n'}))
-	} else {
-		s.buf.Write(p)
-	}
+	s.buf.Write(p)
+	s.trimOldest()
 	s.mu.Unlock()
 	return len(p), nil
+}
+
+// trimOldest drops whole lines from the front of the buffer until it fits in
+// maxBuffer. Must be called with s.mu held.
+func (s *Shipper) trimOldest() {
+	excess := s.buf.Len() - s.maxBuffer
+	if excess <= 0 {
+		return
+	}
+	data := s.buf.Bytes()
+	cut := len(data) // no line boundary after excess: drop everything
+	if i := bytes.IndexByte(data[excess-1:], '\n'); i >= 0 {
+		cut = excess + i // keep from the line that starts after the boundary
+	}
+	s.dropped += max(1, bytes.Count(data[:cut], []byte{'\n'}))
+	s.buf.Next(cut)
 }
 
 func (s *Shipper) loop(ctx context.Context) {
@@ -130,7 +144,8 @@ func (s *Shipper) loop(ctx context.Context) {
 }
 
 // flush sends everything buffered in one request. On failure the batch is
-// put back in front of the buffer (as long as it fits) to be retried.
+// put back in front of the buffer to be retried; if together with the newer
+// lines it does not fit, its oldest lines are the ones dropped.
 func (s *Shipper) flush(ctx context.Context) error {
 	s.mu.Lock()
 	if s.buf.Len() == 0 && s.dropped == 0 {
@@ -139,7 +154,7 @@ func (s *Shipper) flush(ctx context.Context) error {
 	}
 	batch := make([]byte, 0, s.buf.Len()+64)
 	if s.dropped > 0 {
-		batch = fmt.Appendf(batch, "logship: dropped %d log lines while %s was unreachable\n", s.dropped, s.endpoint)
+		batch = fmt.Appendf(batch, "logship: dropped %d old log lines while %s was unreachable\n", s.dropped, s.endpoint)
 	}
 	batch = append(batch, s.buf.Bytes()...)
 	dropped := s.dropped
@@ -154,19 +169,16 @@ func (s *Shipper) flush(ctx context.Context) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(batch)+s.buf.Len() <= s.maxBuffer {
-		// put it back in front, newer lines after it
-		rest := append([]byte(nil), s.buf.Bytes()...)
-		s.buf.Reset()
-		if dropped > 0 { // the drop notice is regenerated on the next try
-			batch = batch[bytes.IndexByte(batch, '\n')+1:]
-		}
-		s.buf.Write(batch)
-		s.buf.Write(rest)
-		s.dropped += dropped
-	} else {
-		s.dropped += dropped + bytes.Count(batch, []byte{'\n'})
+	if dropped > 0 { // the drop notice is regenerated on the next try
+		batch = batch[bytes.IndexByte(batch, '\n')+1:]
 	}
+	// put it back in front, newer lines after it, then trim the oldest
+	rest := append([]byte(nil), s.buf.Bytes()...)
+	s.buf.Reset()
+	s.buf.Write(batch)
+	s.buf.Write(rest)
+	s.dropped += dropped
+	s.trimOldest()
 	return err
 }
 

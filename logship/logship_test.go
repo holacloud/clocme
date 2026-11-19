@@ -115,7 +115,7 @@ func TestRetriesWhenEndpointFails(t *testing.T) {
 	waitFor(t, func() bool { return in.all() == "a\nb\n" })
 }
 
-func TestDropsWhenFullAndReports(t *testing.T) {
+func TestDropsOldestWhenFullAndReports(t *testing.T) {
 	in := &ingest{}
 	in.fail.Store(true)
 	srv := httptest.NewServer(in)
@@ -126,13 +126,59 @@ func TestDropsWhenFullAndReports(t *testing.T) {
 	defer s.Close(time.Second)
 
 	s.Write([]byte("12345678\n")) // 9 bytes, fits
-	s.Write([]byte("overflow\n")) // dropped
-	s.Write([]byte("more\n"))     // dropped
+	s.Write([]byte("newer\n"))    // 15 > 10: the oldest line goes
+	s.Write([]byte("last\n"))     // 11 > 10: "newer" goes
 	in.fail.Store(false)
-	waitFor(t, func() bool { return strings.Contains(in.all(), "12345678\n") })
+	waitFor(t, func() bool { return strings.Contains(in.all(), "last\n") })
 	got := in.all()
-	if !strings.Contains(got, "dropped 2 log lines") || strings.Contains(got, "overflow") {
+	if !strings.Contains(got, "dropped 2 old log lines") || strings.Contains(got, "12345678") || strings.Contains(got, "newer") {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestTrimOldest(t *testing.T) {
+	cases := []struct {
+		in      string
+		max     int
+		want    string
+		dropped int
+	}{
+		{"aaa\nbbb\nccc\n", 12, "aaa\nbbb\nccc\n", 0},
+		{"aaa\nbbb\nccc\n", 11, "bbb\nccc\n", 1},
+		{"aaa\nbbb\nccc\n", 8, "bbb\nccc\n", 1},
+		{"aaa\nbbb\nccc\n", 7, "ccc\n", 2},
+		{"aaa\nbbb\nccc\n", 3, "", 3}, // even the last line does not fit
+		{"a-very-long-line-without-newline", 5, "", 1},
+	}
+	for _, c := range cases {
+		s := newShipper(Config{Endpoint: "http://x"})
+		s.maxBuffer = c.max
+		s.buf.WriteString(c.in)
+		s.trimOldest()
+		if s.buf.String() != c.want || s.dropped != c.dropped {
+			t.Errorf("%q max %d: got %q dropped %d, want %q dropped %d", c.in, c.max, s.buf.String(), s.dropped, c.want, c.dropped)
+		}
+	}
+}
+
+func TestFailedBatchKeepsNewestLines(t *testing.T) {
+	in := &ingest{}
+	in.fail.Store(true)
+	srv := httptest.NewServer(in)
+	defer srv.Close()
+	s := newTestShipper(srv.URL)
+	s.maxBuffer = 12
+	s.errOut = io.Discard
+
+	s.Write([]byte("old1\nold2\n"))
+	s.flush(t.Context()) // fails: batch goes back in front
+	s.Write([]byte("new1\nnew2\n"))
+	// 20 bytes > 12: the two old lines are dropped, the new ones kept
+	if got := s.buf.String(); got != "new1\nnew2\n" {
+		t.Fatalf("buffer %q", got)
+	}
+	if s.dropped != 2 {
+		t.Fatalf("dropped %d", s.dropped)
 	}
 }
 
