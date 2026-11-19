@@ -43,7 +43,7 @@ func (i *ingest) all() string {
 
 // newTestShipper returns a fast, quiet shipper; call start() after tweaking it.
 func newTestShipper(url string) *Shipper {
-	s := newShipper(Config{Endpoint: url, ApiKey: "k", ApiSecret: "s"})
+	s := newShipper(Config{Endpoint: url, ApiKey: "k", ApiSecret: "s"}, 1000)
 	s.interval = 10 * time.Millisecond
 	s.errOut = io.Discard
 	return s
@@ -117,68 +117,75 @@ func TestRetriesWhenEndpointFails(t *testing.T) {
 
 func TestDropsOldestWhenFullAndReports(t *testing.T) {
 	in := &ingest{}
-	in.fail.Store(true)
 	srv := httptest.NewServer(in)
 	defer srv.Close()
-	s := newTestShipper(srv.URL)
-	s.maxBuffer = 10
+	s := newShipper(Config{Endpoint: srv.URL}, 2)
+	s.interval = 10 * time.Millisecond
+	s.errOut = io.Discard
+
+	s.Write([]byte("oldest\n"))
+	s.Write([]byte("old\n"))
+	s.Write([]byte("new\n"))    // full: "oldest" goes
+	s.Write([]byte("newest\n")) // full: "old" goes
 	s.start()
 	defer s.Close(time.Second)
 
-	s.Write([]byte("12345678\n")) // 9 bytes, fits
-	s.Write([]byte("newer\n"))    // 15 > 10: the oldest line goes
-	s.Write([]byte("last\n"))     // 11 > 10: "newer" goes
-	in.fail.Store(false)
-	waitFor(t, func() bool { return strings.Contains(in.all(), "last\n") })
+	waitFor(t, func() bool { return strings.Contains(in.all(), "newest\n") })
 	got := in.all()
-	if !strings.Contains(got, "dropped 2 old log lines") || strings.Contains(got, "12345678") || strings.Contains(got, "newer") {
+	if !strings.Contains(got, "dropped 2 old log lines") || strings.Contains(got, "oldest") || strings.Contains(got, "old\n") {
 		t.Fatalf("got %q", got)
 	}
-}
-
-func TestTrimOldest(t *testing.T) {
-	cases := []struct {
-		in      string
-		max     int
-		want    string
-		dropped int
-	}{
-		{"aaa\nbbb\nccc\n", 12, "aaa\nbbb\nccc\n", 0},
-		{"aaa\nbbb\nccc\n", 11, "bbb\nccc\n", 1},
-		{"aaa\nbbb\nccc\n", 8, "bbb\nccc\n", 1},
-		{"aaa\nbbb\nccc\n", 7, "ccc\n", 2},
-		{"aaa\nbbb\nccc\n", 3, "", 3}, // even the last line does not fit
-		{"a-very-long-line-without-newline", 5, "", 1},
-	}
-	for _, c := range cases {
-		s := newShipper(Config{Endpoint: "http://x"})
-		s.maxBuffer = c.max
-		s.buf.WriteString(c.in)
-		s.trimOldest()
-		if s.buf.String() != c.want || s.dropped != c.dropped {
-			t.Errorf("%q max %d: got %q dropped %d, want %q dropped %d", c.in, c.max, s.buf.String(), s.dropped, c.want, c.dropped)
-		}
+	if !strings.HasSuffix(got, "new\nnewest\n") {
+		t.Fatalf("order: %q", got)
 	}
 }
 
-func TestFailedBatchKeepsNewestLines(t *testing.T) {
+func TestPendingBatchIsDroppedWhenQueueFills(t *testing.T) {
 	in := &ingest{}
 	in.fail.Store(true)
 	srv := httptest.NewServer(in)
 	defer srv.Close()
-	s := newTestShipper(srv.URL)
-	s.maxBuffer = 12
+	s := newShipper(Config{Endpoint: srv.URL}, 2)
 	s.errOut = io.Discard
 
-	s.Write([]byte("old1\nold2\n"))
-	s.flush(t.Context()) // fails: batch goes back in front
-	s.Write([]byte("new1\nnew2\n"))
-	// 20 bytes > 12: the two old lines are dropped, the new ones kept
-	if got := s.buf.String(); got != "new1\nnew2\n" {
-		t.Fatalf("buffer %q", got)
+	s.Write([]byte("b1\n"))
+	s.Write([]byte("b2\n"))
+	if _, err := s.flush(t.Context()); err == nil { // fails: b1,b2 pending
+		t.Fatal("expected failure")
 	}
-	if s.dropped != 2 {
-		t.Fatalf("dropped %d", s.dropped)
+	s.Write([]byte("n1\n"))
+	s.Write([]byte("n2\n")) // queue full again: pending is the oldest data
+	in.fail.Store(false)
+	for more := true; more; {
+		var err error
+		if more, err = s.flush(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := in.all()
+	if strings.Contains(got, "b1") || !strings.Contains(got, "dropped 2 old log lines") || !strings.HasSuffix(got, "n1\nn2\n") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestBacklogIsSentInSeveralBatches(t *testing.T) {
+	in := &ingest{}
+	srv := httptest.NewServer(in)
+	defer srv.Close()
+	s := newShipper(Config{Endpoint: srv.URL}, 5000)
+	s.interval = 10 * time.Millisecond
+	line := strings.Repeat("x", 499) + "\n" // 4000 x 500 B = 2 MB > one batch
+	for i := 0; i < 4000; i++ {
+		s.Write([]byte(line))
+	}
+	s.start()
+	defer s.Close(time.Second)
+	waitFor(t, func() bool { return len(in.all()) == 4000*500 })
+	in.mu.Lock()
+	batches := len(in.bodies)
+	in.mu.Unlock()
+	if batches < 2 {
+		t.Fatalf("expected several batches, got %d", batches)
 	}
 }
 

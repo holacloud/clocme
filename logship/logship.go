@@ -4,14 +4,18 @@
 // The protocol is the one of the instantlogs client: a POST of plain text
 // lines to /v1/loggers/{logger_id}/ingest with Api-Key / Api-Secret headers.
 // The client itself lives in a main package and cannot be imported, so this
-// is a small reimplementation with different trade-offs:
+// is a small reimplementation:
 //
-//   - Write never blocks: lines go to a bounded in-memory buffer and are
-//     sent in batches every second by a background goroutine.
-//   - When the endpoint is down, batches are kept and retried with backoff;
-//     if the buffer fills up, the OLDEST lines are dropped to make room for
-//     the new ones (like the instantlogs client), and the drop is reported
-//     once delivery resumes. The service is never slowed down.
+//   - Write never blocks: each log entry goes to a buffered channel of
+//     QueueSize entries. When it is full the OLDEST entry is dropped to make
+//     room (like the instantlogs client) and the drop is reported once
+//     delivery resumes.
+//   - A single goroutine drains the channel into a reused buffer and sends
+//     batches (up to 1 MB) every second, immediately again while there is
+//     backlog.
+//   - When the endpoint fails, the batch is kept and retried with backoff.
+//     If the queue fills up meanwhile, the pending batch is the oldest data
+//     and is dropped first.
 //   - logship never logs through the standard logger (it would feed itself),
 //     its own errors go straight to stderr.
 package logship
@@ -23,7 +27,7 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,9 +41,14 @@ type Config struct {
 func (c Config) Enabled() bool { return c.LoggerID != "" || c.Endpoint != "" }
 
 const (
-	defaultMaxBuffer = 1 << 20 // bytes kept in memory while the endpoint is slow or down
-	defaultInterval  = time.Second
-	maxBackoff       = 30 * time.Second
+	// QueueSize is the number of log entries kept while the endpoint is slow
+	// or down. The channel slots (16 bytes each, 1.6 MB) only become resident
+	// RAM as they are used; the strings themselves are the log lines.
+	QueueSize = 100_000
+
+	maxBatchBytes   = 1 << 20
+	defaultInterval = time.Second
+	maxBackoff      = 30 * time.Second
 )
 
 type Shipper struct {
@@ -48,14 +57,18 @@ type Shipper struct {
 	apiSecret string
 	client    *http.Client
 	interval  time.Duration
-	maxBuffer int
+	errOut    io.Writer
 
-	mu      sync.Mutex
-	buf     bytes.Buffer // lines waiting to be sent
-	dropped int          // lines dropped since the last successful send
-	stopped chan struct{}
+	lines   chan string
+	dropped atomic.Int64 // entries dropped and not reported yet
+
+	// owned by the sender goroutine (and by Close after it stopped)
+	body         bytes.Buffer // reused batch buffer
+	pending      []byte       // batch that failed to be sent, retried as is
+	pendingLines int          // log entries in pending (the drop notice excluded)
+
 	stop    context.CancelFunc
-	errOut  io.Writer
+	stopped chan struct{}
 }
 
 // New returns a running shipper, or nil if c is not enabled. A nil *Shipper
@@ -64,12 +77,12 @@ func New(c Config) *Shipper {
 	if !c.Enabled() {
 		return nil
 	}
-	s := newShipper(c)
+	s := newShipper(c, QueueSize)
 	s.start()
 	return s
 }
 
-func newShipper(c Config) *Shipper {
+func newShipper(c Config, queueSize int) *Shipper {
 	endpoint := c.Endpoint
 	if endpoint == "" {
 		endpoint = "https://instantlogs.io/v1/loggers/" + c.LoggerID + "/ingest"
@@ -80,9 +93,9 @@ func newShipper(c Config) *Shipper {
 		apiSecret: c.ApiSecret,
 		client:    &http.Client{Timeout: 10 * time.Second},
 		interval:  defaultInterval,
-		maxBuffer: defaultMaxBuffer,
-		stopped:   make(chan struct{}),
 		errOut:    os.Stderr,
+		lines:     make(chan string, queueSize),
+		stopped:   make(chan struct{}),
 	}
 }
 
@@ -92,33 +105,25 @@ func (s *Shipper) start() {
 	go s.loop(ctx)
 }
 
-// Write buffers p (whole log lines, as written by the log package). It never
-// blocks on the network and never fails.
+// Write queues one log entry (the log package writes whole entries). It never
+// blocks and never fails: when the queue is full the oldest entry is dropped.
 func (s *Shipper) Write(p []byte) (int, error) {
 	if s == nil {
 		return len(p), nil
 	}
-	s.mu.Lock()
-	s.buf.Write(p)
-	s.trimOldest()
-	s.mu.Unlock()
-	return len(p), nil
-}
-
-// trimOldest drops whole lines from the front of the buffer until it fits in
-// maxBuffer. Must be called with s.mu held.
-func (s *Shipper) trimOldest() {
-	excess := s.buf.Len() - s.maxBuffer
-	if excess <= 0 {
-		return
+	line := string(p) // copy: the log package reuses p
+	for {
+		select {
+		case s.lines <- line:
+			return len(p), nil
+		default:
+			select { // full: make room by dropping the oldest entry
+			case <-s.lines:
+				s.dropped.Add(1)
+			default: // the sender just made room
+			}
+		}
 	}
-	data := s.buf.Bytes()
-	cut := len(data) // no line boundary after excess: drop everything
-	if i := bytes.IndexByte(data[excess-1:], '\n'); i >= 0 {
-		cut = excess + i // keep from the line that starts after the boundary
-	}
-	s.dropped += max(1, bytes.Count(data[:cut], []byte{'\n'}))
-	s.buf.Next(cut)
 }
 
 func (s *Shipper) loop(ctx context.Context) {
@@ -132,54 +137,60 @@ func (s *Shipper) loop(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-		if err := s.flush(ctx); err != nil {
+		more, err := s.flush(ctx)
+		switch {
+		case err != nil:
 			fmt.Fprintf(s.errOut, "logship: %v (retrying in %s)\n", err, backoff)
 			timer.Reset(backoff)
 			backoff = min(backoff*2, maxBackoff)
-			continue
+		case more:
+			backoff = s.interval
+			timer.Reset(0) // backlog: send the next batch right away
+		default:
+			backoff = s.interval
+			timer.Reset(s.interval)
 		}
-		backoff = s.interval
-		timer.Reset(s.interval)
 	}
 }
 
-// flush sends everything buffered in one request. On failure the batch is
-// put back in front of the buffer to be retried; if together with the newer
-// lines it does not fit, its oldest lines are the ones dropped.
-func (s *Shipper) flush(ctx context.Context) error {
-	s.mu.Lock()
-	if s.buf.Len() == 0 && s.dropped == 0 {
-		s.mu.Unlock()
-		return nil
-	}
-	batch := make([]byte, 0, s.buf.Len()+64)
-	if s.dropped > 0 {
-		batch = fmt.Appendf(batch, "logship: dropped %d old log lines while %s was unreachable\n", s.dropped, s.endpoint)
-	}
-	batch = append(batch, s.buf.Bytes()...)
-	dropped := s.dropped
-	s.buf.Reset()
-	s.dropped = 0
-	s.mu.Unlock()
-
-	err := s.send(ctx, batch)
-	if err == nil {
-		return nil
+// flush sends one batch: the pending one if a previous attempt failed,
+// otherwise a new one drained from the queue. more reports that the queue
+// still has entries.
+func (s *Shipper) flush(ctx context.Context) (more bool, err error) {
+	if s.pending != nil && len(s.lines) == cap(s.lines) {
+		// the queue filled up while retrying: the pending batch is the
+		// oldest data, drop it in favor of the newer entries
+		s.dropped.Add(int64(s.pendingLines))
+		s.pending, s.pendingLines = nil, 0
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if dropped > 0 { // the drop notice is regenerated on the next try
-		batch = batch[bytes.IndexByte(batch, '\n')+1:]
+	if s.pending == nil {
+		s.body.Reset()
+		if d := s.dropped.Swap(0); d > 0 {
+			fmt.Fprintf(&s.body, "logship: dropped %d old log lines while %s was unreachable\n", d, s.endpoint)
+		}
+		n := 0
+	drain:
+		for s.body.Len() < maxBatchBytes {
+			select {
+			case line := <-s.lines:
+				s.body.WriteString(line)
+				n++
+			default:
+				break drain
+			}
+		}
+		if s.body.Len() == 0 {
+			return false, nil
+		}
+		s.pending, s.pendingLines = s.body.Bytes(), n
 	}
-	// put it back in front, newer lines after it, then trim the oldest
-	rest := append([]byte(nil), s.buf.Bytes()...)
-	s.buf.Reset()
-	s.buf.Write(batch)
-	s.buf.Write(rest)
-	s.dropped += dropped
-	s.trimOldest()
-	return err
+
+	if err := s.send(ctx, s.pending); err != nil {
+		return false, err
+	}
+	s.pending, s.pendingLines = nil, 0
+	return len(s.lines) > 0, nil
 }
 
 func (s *Shipper) send(ctx context.Context, batch []byte) error {
@@ -204,17 +215,24 @@ func (s *Shipper) send(ctx context.Context, batch []byte) error {
 	return nil
 }
 
-// Close stops the background loop and makes a last attempt to deliver what
-// is buffered, waiting at most timeout.
+// Close stops the background loop and tries to deliver what is queued,
+// waiting at most timeout.
 func (s *Shipper) Close(timeout time.Duration) {
 	if s == nil {
 		return
 	}
 	s.stop()
-	<-s.stopped
+	<-s.stopped // from here on this goroutine owns body/pending
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if err := s.flush(ctx); err != nil {
-		fmt.Fprintf(s.errOut, "logship: final flush: %v\n", err)
+	for {
+		more, err := s.flush(ctx)
+		if err != nil {
+			fmt.Fprintf(s.errOut, "logship: final flush: %v\n", err)
+			return
+		}
+		if !more {
+			return
+		}
 	}
 }

@@ -95,10 +95,11 @@ variables in docker-compose or they will override the file. `data_dir` and
 Logs always go to stderr (`make logs`). To also ship them to
 [instantlogs.io](https://instantlogs.io), fill the `instantlogs` section of
 `config.json` (`logger_id`, `api_key`, `api_secret`; `endpoint` optional for a
-self-hosted instantlogsd). Shipping never blocks the service: lines are
-buffered (1 MB) and sent in batches every second, retried with backoff when
-the endpoint is down; if the buffer fills up the oldest lines are dropped
-to make room for the new ones (and the drop is reported).
+self-hosted instantlogsd). Shipping never blocks the service: log entries
+go to a buffered channel of 100k entries and are sent in batches (up to 1 MB)
+every second, retried with backoff when the endpoint is down; when the queue
+is full the oldest entries are dropped to make room for the new ones (and
+the drop is reported).
 
 Optional docker-side settings (host `PORT`, `DATA_DIR`, `CONFIG_FILE`) can go
 in `.env`, see `.env.example`.
