@@ -42,7 +42,8 @@ type API struct {
 	templates *template.Template
 }
 
-func New(svc *service.Service, rz *raster.Rasterizer, baseURL, version string) (*box.B, error) {
+// New builds the HTTP handler: the box router wrapped in the access log.
+func New(svc *service.Service, rz *raster.Rasterizer, baseURL, version string) (http.Handler, error) {
 	a := &API{
 		svc:     svc,
 		raster:  rz,
@@ -74,7 +75,6 @@ func New(svc *service.Service, rz *raster.Rasterizer, baseURL, version string) (
 		}
 		return box.DefaultSerialize(ctx, w, v)
 	}
-	b.Use(accessLog)
 	b.Use(box.RecoverFromPanic)
 
 	b.HandleFunc("GET", "/", a.home)
@@ -94,16 +94,7 @@ func New(svc *service.Service, rz *raster.Rasterizer, baseURL, version string) (
 	b.HandleFunc("GET", "/{host}/{owner}", a.owner)
 	b.HandleFunc("GET", "/{host}/{owner}/{repo}", a.repo)
 
-	return b, nil
-}
-
-func accessLog(next box.H) box.H {
-	return func(ctx context.Context) {
-		r := box.GetRequest(ctx)
-		start := time.Now()
-		next(ctx)
-		log.Printf("%s %s %s dest=%q (%s)", r.Method, r.URL.RequestURI(), r.Header.Get("User-Agent"), r.Header.Get("Sec-Fetch-Dest"), time.Since(start).Round(time.Microsecond))
-	}
+	return accessLog(b), nil
 }
 
 func (a *API) render(w http.ResponseWriter, status int, name string, data any) {
