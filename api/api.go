@@ -87,6 +87,7 @@ func New(svc *service.Service, baseURL, version string) (*box.B, error) {
 		staticHandler.ServeHTTP(w, r)
 	})
 
+	b.HandleFunc("GET", "/{host}/{owner}", a.owner)
 	b.HandleFunc("GET", "/{host}/{owner}/{repo}", a.repo)
 
 	return b, nil
@@ -159,10 +160,21 @@ func (a *API) goTo(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/"+slug, http.StatusSeeOther)
 }
 
-var reRepoInput = regexp.MustCompile(`^(?:(?:https?://)?(?:www\.)?github\.com[/:]|git@github\.com:)?([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?(?:/.*)?$`)
+var (
+	reRepoInput  = regexp.MustCompile(`^(?:(?:https?://)?(?:www\.)?github\.com[/:]|git@github\.com:)?([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?(?:/.*)?$`)
+	reOwnerInput = regexp.MustCompile(`^(?:(?:https?://)?(?:www\.)?github\.com/|@)?([A-Za-z0-9-]+)/?$`)
+)
 
+// parseRepoInput accepts a repo (owner/repo, URLs, git remotes) or an owner
+// (name, @name, github.com/name) and returns the path to redirect to.
 func parseRepoInput(s string) (string, error) {
 	s = strings.TrimSpace(s)
+	if m := reOwnerInput.FindStringSubmatch(s); m != nil {
+		if _, err := model.OwnerID("github.com", m[1]); err != nil {
+			return "", err
+		}
+		return "github.com/" + m[1], nil
+	}
 	m := reRepoInput.FindStringSubmatch(s)
 	if m == nil {
 		return "", errBadInput
@@ -177,7 +189,7 @@ type inputError string
 
 func (e inputError) Error() string { return string(e) }
 
-const errBadInput = inputError("That doesn't look like a GitHub repository. Try github.com/owner/repo")
+const errBadInput = inputError("That doesn't look like a GitHub repository or user. Try github.com/owner/repo or github.com/owner")
 
 func (a *API) repo(w http.ResponseWriter, r *http.Request) {
 	host := strings.ToLower(box.Param(r, "host"))

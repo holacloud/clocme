@@ -1,0 +1,80 @@
+{{template "head" .Meta}}
+
+<div id="owner-app" data-view="{{.ViewJSON}}">
+  <header class="owner-head">
+    {{with .View.AvatarURL}}<img class="avatar" src="{{.}}&s=160" alt="" width="80" height="80">{{end}}
+    <div>
+      <h1><a href="https://{{.View.Slug}}" class="contrast">{{if .View.Name}}{{.View.Name}}{{else}}{{.View.Login}}{{end}}</a></h1>
+      <p class="muted">
+        {{if .View.Name}}{{.View.Login}} · {{end}}{{if eq .View.Type "Organization"}}organization{{else}}user{{end}}
+        <span v-cloak> · ${ ready } of ${ repos.length } repositories charted</span>
+        <span v-if="code" v-cloak> · ${ compact(code) } lines of code</span>
+      </p>
+      {{with .View.Bio}}<p class="bio">{{.}}</p>{{end}}
+    </div>
+  </header>
+
+  <div v-if="languages.length" class="lang-bar" v-cloak>
+    <div class="bar">
+      <span v-for="l in languages" :style="{ width: l.percent + '%', background: l.color }" :title="l.name + ' ' + l.percent + '%'"></span>
+    </div>
+    <ul class="chips">
+      <li v-for="l in languages"><i :style="{ background: l.color }"></i>${ l.name } <small>${ l.percent }%</small></li>
+    </ul>
+  </div>
+
+  <p v-if="pending" class="queue-note" v-cloak>
+    <span aria-busy="true">Analyzing repositories: ${ pending } left. Charts appear as they are ready, no need to reload.</span>
+  </p>
+  {{if .View.Truncated}}<p class="muted"><small>Only the {{len .View.Repos}} most recently pushed repositories are listed.</small></p>{{end}}
+
+  <div class="owner-tools" v-cloak>
+    <input type="search" v-model="filter" placeholder="Filter repositories" aria-label="Filter repositories">
+    <select v-model="sort" aria-label="Sort">
+      <option value="stars">Most stars</option>
+      <option value="code">Most code</option>
+      <option value="pushed">Recently pushed</option>
+      <option value="name">Name</option>
+    </select>
+  </div>
+
+  <div class="grid-cards owner-cards" v-cloak>
+    <a v-for="r in visible" :key="r.name" class="card" :href="'/' + r.slug">
+      <div class="thumb">
+        <img v-if="r.has_chart" :src="thumb(r)" :alt="'Lines of code of ' + r.name" loading="lazy" width="400" height="200">
+        <div v-else class="thumb-status" :class="r.status">
+          <span v-if="r.status === 'processing'" aria-busy="true">${ progressText(r) }</span>
+          <span v-else-if="r.status === 'pending'">Queued</span>
+          <span v-else-if="r.status === 'too_big'">Too big for now</span>
+          <span v-else-if="r.status === 'not_found'">Not available</span>
+          <span v-else-if="r.status === 'error'">Analysis failed, will retry</span>
+          <span v-else>${ r.status }</span>
+        </div>
+      </div>
+      <div class="card-title">
+        <strong>${ r.name }</strong>
+        <small v-if="r.archived" class="tag">archived</small>
+        <small class="stars" v-if="r.stars">★ ${ compact(r.stars) }</small>
+      </div>
+      <p class="card-desc" v-if="r.description">${ r.description }</p>
+      <div class="card-meta">
+        <span v-for="l in r.languages" class="chip"><i :style="{ background: l.color }"></i>${ l.name }</span>
+        <span v-if="r.code" class="muted">${ compact(r.code) } lines</span>
+      </div>
+    </a>
+  </div>
+  <p v-if="!visible.length" class="muted" v-cloak>No repositories match.</p>
+
+  <noscript>
+    <ul>
+    {{range .View.Repos}}
+      <li><a href="/{{.Slug}}">{{.Name}}</a>{{with .Description}} · {{.}}{{end}}</li>
+    {{end}}
+    </ul>
+  </noscript>
+</div>
+
+<script src="/static/vendor/vue.global.prod.js"></script>
+<script src="/static/owner.js"></script>
+
+{{template "foot"}}

@@ -25,7 +25,7 @@ func newTestAPI(t *testing.T, repos ...*model.Repo) *httptest.Server {
 			t.Fatal(err)
 		}
 	}
-	svc := service.New(rs, store.NewStoreMemory[model.Series](), nil, nil, telegram.New(telegram.Config{}), service.Options{RefreshInterval: time.Hour})
+	svc := service.New(rs, store.NewStoreMemory[model.Series](), store.NewStoreMemory[model.Owner](), nil, nil, telegram.New(telegram.Config{}), service.Options{RefreshInterval: time.Hour})
 	b, err := New(svc, "https://cloc.example", "test")
 	if err != nil {
 		t.Fatal(err)

@@ -1,11 +1,14 @@
 // Package service owns the repository lifecycle: registering repos when they
 // are requested, the refresh queue and the workers that sync + analyze them.
 //
-// Queue policy (as agreed):
-//   - Requested repos that are new or stale go to the front queue (FIFO, deduplicated).
-//   - When the front queue is empty, workers cycle over all known repos,
-//     picking the one checked longest ago, if it was checked more than
-//     RefreshInterval ago.
+// Queue policy:
+//   - Requested repos that are new or stale go to the priority queue (FIFO,
+//     deduplicated).
+//   - Repos discovered through an owner page go to the bulk queue, served
+//     only when the priority queue is empty, so one big organization does not
+//     delay somebody asking for a single repo.
+//   - When both are empty, workers cycle over all known repos, picking the one
+//     checked longest ago, if it was checked more than RefreshInterval ago.
 package service
 
 import (
@@ -34,6 +37,7 @@ type Analyzer interface {
 // Host is implemented by *githost.Github.
 type Host interface {
 	Info(ctx context.Context, owner, name string) (*githost.RepoInfo, error)
+	Owner(ctx context.Context, login string, maxRepos int) (*githost.OwnerListing, error)
 }
 
 type Options struct {
@@ -41,6 +45,8 @@ type Options struct {
 	RefreshInterval time.Duration
 	AnalyzeTimeout  time.Duration
 	MaxRepoSizeKB   int64
+	MaxOwnerRepos   int           // repos listed (and enqueued) per owner, 0 = no limit
+	OwnerRefresh    time.Duration // how old an owner listing can be before it is refreshed
 	BaseURL         string
 }
 
@@ -53,22 +59,27 @@ type Progress struct {
 type Service struct {
 	repos    store.Storer[model.Repo]
 	series   store.Storer[model.Series]
+	owners   store.Storer[model.Owner]
 	analyzer Analyzer
 	host     Host
 	tg       *telegram.Telegram
 	opts     Options
 
 	updateMu sync.Mutex // serializes read-modify-write of repo documents
+	ownerMu  sync.Mutex // serializes owner listings
 
-	mu       sync.Mutex
-	queue    []string
-	queued   map[string]bool
-	working  map[string]bool
-	progress map[string]Progress
-	wake     chan struct{}
+	mu           sync.Mutex
+	queue        []string
+	queued       map[string]bool
+	bulk         []string
+	bulkQueued   map[string]bool
+	ownerListing map[string]bool // owner ids being refreshed in background
+	working      map[string]bool
+	progress     map[string]Progress
+	wake         chan struct{}
 }
 
-func New(repos store.Storer[model.Repo], series store.Storer[model.Series], a Analyzer, h Host, tg *telegram.Telegram, opts Options) *Service {
+func New(repos store.Storer[model.Repo], series store.Storer[model.Series], owners store.Storer[model.Owner], a Analyzer, h Host, tg *telegram.Telegram, opts Options) *Service {
 	if opts.Workers < 1 {
 		opts.Workers = 1
 	}
@@ -78,17 +89,23 @@ func New(repos store.Storer[model.Repo], series store.Storer[model.Series], a An
 	if opts.AnalyzeTimeout <= 0 {
 		opts.AnalyzeTimeout = 30 * time.Minute
 	}
+	if opts.OwnerRefresh <= 0 {
+		opts.OwnerRefresh = 24 * time.Hour
+	}
 	return &Service{
-		repos:    repos,
-		series:   series,
-		analyzer: a,
-		host:     h,
-		tg:       tg,
-		opts:     opts,
-		queued:   map[string]bool{},
-		working:  map[string]bool{},
-		progress: map[string]Progress{},
-		wake:     make(chan struct{}, 1),
+		repos:        repos,
+		series:       series,
+		owners:       owners,
+		analyzer:     a,
+		host:         h,
+		tg:           tg,
+		opts:         opts,
+		queued:       map[string]bool{},
+		bulkQueued:   map[string]bool{},
+		ownerListing: map[string]bool{},
+		working:      map[string]bool{},
+		progress:     map[string]Progress{},
+		wake:         make(chan struct{}, 1),
 	}
 }
 
@@ -149,9 +166,16 @@ func (s *Service) Recent(ctx context.Context, n int) ([]*model.Repo, error) {
 	return ready, nil
 }
 
-// Request registers a repo if unknown and enqueues it if new or stale.
-// It never blocks on git operations.
+// Request registers a repo if unknown and enqueues it (priority) if new or
+// stale. It never blocks on git operations.
 func (s *Service) Request(ctx context.Context, host, owner, name string) (*model.Repo, error) {
+	return s.register(ctx, host, owner, name, false)
+}
+
+// register is Request with a choice of queue: bulk registrations (owner
+// pages) only enqueue new repos, in the low priority queue, and do not count
+// as a user request.
+func (s *Service) register(ctx context.Context, host, owner, name string, bulk bool) (*model.Repo, error) {
 	id, err := model.RepoID(host, owner, name)
 	if err != nil {
 		return nil, err
@@ -167,13 +191,20 @@ func (s *Service) Request(ctx context.Context, host, owner, name string) (*model
 			r.CreatedAt = now
 		}
 		// Avoid rewriting the file on every image hit: only bump every minute.
-		if now.Sub(r.RequestedAt) > time.Minute {
+		if !bulk && now.Sub(r.RequestedAt) > time.Minute {
 			r.RequestedAt = now
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	if bulk {
+		if repo.Status == model.StatusPending {
+			s.EnqueueBulk(id)
+		}
+		return repo, nil
 	}
 
 	switch repo.Status {
@@ -189,14 +220,31 @@ func (s *Service) Request(ctx context.Context, host, owner, name string) (*model
 	return repo, nil
 }
 
-// Enqueue puts a repo in the front queue (deduplicated).
+// Enqueue puts a repo in the priority queue (deduplicated). If it was
+// waiting in the bulk queue it is promoted.
 func (s *Service) Enqueue(id string) {
 	s.mu.Lock()
+	delete(s.bulkQueued, id) // lazily skipped when popped from s.bulk
 	if !s.queued[id] && !s.working[id] {
 		s.queued[id] = true
 		s.queue = append(s.queue, id)
 	}
 	s.mu.Unlock()
+	s.signal()
+}
+
+// EnqueueBulk puts a repo in the low priority queue (deduplicated).
+func (s *Service) EnqueueBulk(id string) {
+	s.mu.Lock()
+	if !s.queued[id] && !s.bulkQueued[id] && !s.working[id] {
+		s.bulkQueued[id] = true
+		s.bulk = append(s.bulk, id)
+	}
+	s.mu.Unlock()
+	s.signal()
+}
+
+func (s *Service) signal() {
 	select {
 	case s.wake <- struct{}{}:
 	default:
@@ -227,8 +275,11 @@ func (s *Service) recoverInterrupted(ctx context.Context) {
 		return
 	}
 	for _, r := range all {
-		if r.Status == model.StatusProcessing || r.Status == model.StatusPending || outdated(r) {
+		switch {
+		case r.Status == model.StatusProcessing:
 			s.Enqueue(r.Id.Id)
+		case r.Status == model.StatusPending || outdated(r):
+			s.EnqueueBulk(r.Id.Id)
 		}
 	}
 }
@@ -255,7 +306,8 @@ func (s *Service) worker(ctx context.Context) {
 	}
 }
 
-// next pops the front queue or, if empty, the stalest known repo.
+// next pops the priority queue, then the bulk queue or, if both are empty,
+// the stalest known repo.
 func (s *Service) next(ctx context.Context) string {
 	s.mu.Lock()
 	for len(s.queue) > 0 {
@@ -265,6 +317,17 @@ func (s *Service) next(ctx context.Context) string {
 		if s.working[id] {
 			continue
 		}
+		s.working[id] = true
+		s.mu.Unlock()
+		return id
+	}
+	for len(s.bulk) > 0 {
+		id := s.bulk[0]
+		s.bulk = s.bulk[1:]
+		if !s.bulkQueued[id] || s.working[id] {
+			continue // promoted to the priority queue, or already running
+		}
+		delete(s.bulkQueued, id)
 		s.working[id] = true
 		s.mu.Unlock()
 		return id

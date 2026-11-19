@@ -10,6 +10,12 @@ embeddable SVG.
 The same URL serves the **SVG** to images/proxies (GitHub camo, `<img>`, curl)
 and an **HTML page** with details and a chart builder to browsers.
 
+`https://cloc.hola.cloud/github.com/owner` shows every public repository of a
+user or organization (forks and empty repos excluded, up to
+`maxownerrepos`). The first visit lists them on GitHub and queues them all in
+a low priority queue (most starred first), so single repo requests are never
+delayed by a big organization. Cards fill in as charts are ready.
+
 ## Chart options
 
 | Param     | Values                                   | Default   |

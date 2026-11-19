@@ -198,3 +198,10 @@ func ensureVisible(hex string) string {
 	mix := func(c float64) uint64 { return uint64(c + (255-c)*t + 0.5) }
 	return fmt.Sprintf("#%02x%02x%02x", mix(r), mix(g), mix(b))
 }
+
+// LanguageColor returns the chart color of a language (GitHub Linguist
+// colors, deterministic fallback for unknown ones), adjusted to be visible
+// on light and dark backgrounds.
+func LanguageColor(lang string) string {
+	return colorFor(lang)
+}

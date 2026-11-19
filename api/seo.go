@@ -32,6 +32,14 @@ func (a *API) sitemap(w http.ResponseWriter, r *http.Request) {
 
 	set := sitemapURLSet{Xmlns: "http://www.sitemaps.org/schemas/sitemap/0.9"}
 	set.URLs = append(set.URLs, sitemapURL{Loc: a.baseURL + "/"})
+
+	owners, err := a.svc.Owners(r.Context())
+	if err != nil {
+		log.Println("sitemap owners:", err)
+	}
+	for _, o := range owners {
+		set.URLs = append(set.URLs, sitemapURL{Loc: a.baseURL + "/" + o.Slug(), LastMod: o.ListedAt.UTC().Format(time.RFC3339)})
+	}
 	for _, repo := range repos {
 		if len(set.URLs) >= sitemapMax {
 			break

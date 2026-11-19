@@ -51,6 +51,11 @@ func main() {
 		log.Fatalf("series store: %v", err)
 	}
 
+	owners, err := store.NewStoreDiskCached[model.Owner](filepath.Join(c.DataDir, "owners"))
+	if err != nil {
+		log.Fatalf("owners store: %v", err)
+	}
+
 	a := analyzer.New(analyzer.Config{
 		ReposDir:     filepath.Join(c.DataDir, "clones"),
 		CacheDir:     filepath.Join(c.DataDir, "blobcache"),
@@ -59,11 +64,12 @@ func main() {
 
 	tg := telegram.New(c.Telegram)
 
-	svc := service.New(repos, series, a, githost.NewGithub(c.GithubToken), tg, service.Options{
+	svc := service.New(repos, series, owners, a, githost.NewGithub(c.GithubToken), tg, service.Options{
 		Workers:         c.Workers,
 		RefreshInterval: time.Duration(c.RefreshMinutes) * time.Minute,
 		AnalyzeTimeout:  time.Duration(c.AnalyzeTimeoutMinutes) * time.Minute,
 		MaxRepoSizeKB:   c.MaxRepoSizeMB * 1024,
+		MaxOwnerRepos:   c.MaxOwnerRepos,
 		BaseURL:         c.BaseURL,
 	})
 

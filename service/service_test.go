@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -45,7 +47,7 @@ func (f *fakeAnalyzer) Analyze(ctx context.Context, repoID, head string, prev []
 }
 
 func newTestService(a Analyzer, h Host) *Service {
-	return New(store.NewStoreMemory[model.Repo](), store.NewStoreMemory[model.Series](), a, h, telegram.New(telegram.Config{}), Options{
+	return New(store.NewStoreMemory[model.Repo](), store.NewStoreMemory[model.Series](), store.NewStoreMemory[model.Owner](), a, h, telegram.New(telegram.Config{}), Options{
 		RefreshInterval: time.Hour,
 		MaxRepoSizeKB:   1000,
 	})
@@ -141,5 +143,69 @@ func TestRequestValidation(t *testing.T) {
 		if _, err := s.Request(context.Background(), c[0], c[1], c[2]); err == nil {
 			t.Errorf("%v should fail", c)
 		}
+	}
+}
+
+func (f *fakeHost) Owner(ctx context.Context, login string, maxRepos int) (*githost.OwnerListing, error) {
+	if login == "ghost" {
+		return nil, githost.ErrNotFound
+	}
+	l := &githost.OwnerListing{Login: "Acme", Type: "Organization"}
+	for _, n := range []string{"one", "two", "three"} {
+		if maxRepos > 0 && len(l.Repos) == maxRepos {
+			l.Truncated = true
+			break
+		}
+		l.Repos = append(l.Repos, githost.RepoSummary{Name: n, Stars: len(n)})
+	}
+	return l, nil
+}
+
+func TestRequestOwnerRegistersReposInBulk(t *testing.T) {
+	s := newTestService(&fakeAnalyzer{head: "c1"}, &fakeHost{size: 10})
+	ctx := context.Background()
+
+	o, err := s.RequestOwner(ctx, "github.com", "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Login != "Acme" || len(o.Repos) != 3 || o.ListedAt.IsZero() {
+		t.Fatalf("owner %+v", o)
+	}
+	repos := s.OwnerRepos(ctx, o)
+	for i, r := range repos {
+		if r == nil || r.Status != model.StatusPending || r.Owner != "Acme" || r.Name != o.Repos[i].Name {
+			t.Fatalf("repo %d: %+v", i, r)
+		}
+		if !r.RequestedAt.IsZero() {
+			t.Errorf("bulk registration must not count as a request")
+		}
+	}
+
+	// A single repo request jumps ahead of the bulk queue, even if it was
+	// already waiting there.
+	s.Request(ctx, "github.com", "acme", "three")
+	s.Request(ctx, "github.com", "other", "repo")
+	var order []string
+	for i := 0; i < 4; i++ {
+		order = append(order, s.next(ctx))
+	}
+	// bulk order: most starred first (fake stars = len(name): three=5, one=3, two=3)
+	want := []string{"github.com~acme~three", "github.com~other~repo", "github.com~acme~one", "github.com~acme~two"}
+	if strings.Join(order, " ") != strings.Join(want, " ") {
+		t.Fatalf("order %v, want %v", order, want)
+	}
+	if id := s.next(ctx); id != "" {
+		t.Fatalf("promoted repo processed twice: %s", id)
+	}
+
+	// Cached listing: no second call needed, same data.
+	o2, err := s.RequestOwner(ctx, "github.com", "ACME")
+	if err != nil || !o2.ListedAt.Equal(o.ListedAt) {
+		t.Fatalf("expected cached listing: %v %+v", err, o2)
+	}
+
+	if _, err := s.RequestOwner(ctx, "github.com", "ghost"); !errors.Is(err, githost.ErrNotFound) {
+		t.Fatalf("ghost: %v", err)
 	}
 }

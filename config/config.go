@@ -17,6 +17,7 @@ type Config struct {
 	MaxBlobBytes          int64 `json:"max_blob_bytes" usage:"Files bigger than this are not counted"`
 	RefreshMinutes        int   `json:"refresh_minutes" usage:"Minimum minutes between two checks of the same repo"`
 	Workers               int   `json:"workers" usage:"Number of concurrent analysis workers"`
+	MaxOwnerRepos         int   `json:"max_owner_repos" usage:"Max repos listed and enqueued per user/organization page (0 = no limit)"`
 	AnalyzeTimeoutMinutes int   `json:"analyze_timeout_minutes" usage:"Max minutes for one sync+analysis"`
 
 	Telegram telegram.Config `json:"telegram"`
@@ -34,6 +35,7 @@ func Default() *Config {
 		MaxBlobBytes:          1 << 20,
 		RefreshMinutes:        60,
 		Workers:               1,
+		MaxOwnerRepos:         300,
 		AnalyzeTimeoutMinutes: 30,
 	}
 }

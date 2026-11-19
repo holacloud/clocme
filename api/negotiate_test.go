@@ -69,7 +69,12 @@ func TestParseRepoInput(t *testing.T) {
 		"https://github.com/fulldump/box/tree/master/": "github.com/fulldump/box",
 		"  http://www.github.com/fulldump/box  ":       "github.com/fulldump/box",
 		"https://gitlab.com/a/b":                       "",
-		"nonsense":                                     "",
+		"nonsense":                                     "github.com/nonsense",
+		"fulldump":                                     "github.com/fulldump",
+		"@fulldump":                                    "github.com/fulldump",
+		"https://github.com/fulldump/":                 "github.com/fulldump",
+		"not a repo":                                   "",
+		"https://gitlab.com/someone":                   "",
 	}
 	for in, want := range cases {
 		got, _ := parseRepoInput(in)
