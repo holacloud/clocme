@@ -4,13 +4,19 @@ DATADIR ?= ./data
 LDFLAGS := -s -w -X github.com/holacloud/clocme/config.VERSION=$(VERSION)
 
 # docker compose gets the version and the host user (so files in the data
-# volume stay owned by you). Other settings come from .env (see .env.example).
+# volume stay owned by you). App settings live in config.json (mounted into
+# the container); docker-side settings can go in .env (see .env.example).
 COMPOSE := VERSION=$(VERSION) UID=$(shell id -u) GID=$(shell id -g) docker compose
 
 .PHONY: up down restart logs ps rebuild docker-test run build test vet fmt tidy clean help
 
-## up: build the image and start the service in docker (data mounted from ./data)
-up:
+## config.json: created from config.example.json if it does not exist
+config.json:
+	cp config.example.json config.json
+	@echo "created config.json from config.example.json, edit it to set github_token, telegram..."
+
+## up: build the image and start the service in docker (data and config.json mounted)
+up: config.json
 	mkdir -p $(DATADIR)
 	$(COMPOSE) up -d --build
 	@echo "clocme running on http://localhost:$(PORT)"
@@ -19,9 +25,11 @@ up:
 down:
 	$(COMPOSE) down
 
-## restart: restart the container without rebuilding
-restart:
-	$(COMPOSE) restart
+## restart: apply config.json changes (recreates the container, no rebuild)
+# Recreate instead of `docker restart`: editors often save by replacing the
+# file, and a restarted container would keep seeing the old one.
+restart: config.json
+	$(COMPOSE) up -d --force-recreate --no-build
 
 ## logs: follow the service logs
 logs:

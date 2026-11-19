@@ -3,3 +3,4 @@ data
 clocme
 .env
 *.test
+config.json

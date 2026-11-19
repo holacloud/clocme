@@ -1,9 +1,14 @@
-# Everything runs inside docker; data lives on the host and is mounted.
+# Everything runs inside docker; data and configuration live on the host.
 #
-#   cp .env.example .env   # optional: tokens, port, data dir...
-#   make up                # build + start
-#   make logs
-#   make down
+#   make up        # creates config.json from config.example.json if missing, builds, starts
+#   make restart   # apply config.json changes (recreates the container, no rebuild)
+#   make logs / make down
+#
+# App configuration goes in config.json (read by goconfig from the working
+# directory). Do not add an `environment:` block for app settings here:
+# environment variables take precedence over config.json and would silently
+# override it. Optional docker-side settings (PORT, DATA_DIR, CONFIG_FILE)
+# can go in .env.
 services:
   clocme:
     build:
@@ -19,12 +24,4 @@ services:
       - "${PORT:-7070}:8080"
     volumes:
       - ${DATA_DIR:-./data}:/data
-    environment:
-      BASEURL: ${BASEURL:-http://localhost:7070}
-      GITHUBTOKEN: ${GITHUBTOKEN:-}
-      TELEGRAM_BOT: ${TELEGRAM_BOT:-}
-      TELEGRAM_CHAT: ${TELEGRAM_CHAT:-}
-      MAXREPOSIZEMB: ${MAXREPOSIZEMB:-500}
-      REFRESHMINUTES: ${REFRESHMINUTES:-60}
-      WORKERS: ${WORKERS:-1}
-      MAXOWNERREPOS: ${MAXOWNERREPOS:-300}
+      - ${CONFIG_FILE:-./config.json}:/app/config.json:ro

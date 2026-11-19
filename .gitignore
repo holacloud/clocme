@@ -2,3 +2,4 @@
 /clocme
 *.test
 .env
+/config.json

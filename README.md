@@ -72,22 +72,35 @@ Runtime requirements: `git`, and optionally `rsvg-convert` + a font for PNG prev
 
 ## Run
 
-Everything runs in docker; data lives on the host (`./data`) and is mounted
-as a volume, so it survives rebuilds and is owned by your user.
+Everything runs in docker. Data (`./data`) and configuration
+(`./config.json`) live on the host and are mounted into the container.
 
 ```sh
-cp .env.example .env   # optional: GITHUBTOKEN, TELEGRAM_*, PORT, DATA_DIR, BASEURL...
-make up                # build image + start on http://localhost:7070
+make up                # creates config.json from config.example.json if missing, builds, starts on :7070
+$EDITOR config.json    # github_token, telegram, limits...
+make restart           # apply config changes (recreates the container, no rebuild)
 make logs              # follow logs
 make ps                # status / health
 make down              # stop (data is kept)
 make docker-test       # vet + tests inside a golang container
 ```
 
-A `GITHUBTOKEN` is strongly recommended: without it the GitHub API allows
-only 60 requests/hour (one per analysis).
+Configuration is read by goconfig from `config.json` in the working
+directory (`/app` in the container). Keys are the `json` tags of
+`config/config.go`; see `config.example.json`. Precedence: flags > env vars
+> config.json > defaults, so do not set app settings as environment
+variables in docker-compose or they will override the file. `data_dir` and
+`addr` are fixed by the image (`/data`, `:8080`).
 
-Without docker: `make run`, `make test` (needs Go and git).
+Optional docker-side settings (host `PORT`, `DATA_DIR`, `CONFIG_FILE`) can go
+in `.env`, see `.env.example`.
+
+A `github_token` is strongly recommended: without it the GitHub API allows
+only 60 requests/hour (one per analysis). A fine-grained token with
+"Public repositories (read-only)" and no permissions is enough.
+
+Without docker: `make run`, `make test` (needs Go and git; `config.json` in
+the repo root is picked up too).
 
 ## Data layout
 

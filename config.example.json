@@ -1,0 +1,14 @@
+{
+  "base_url": "http://localhost:7070",
+  "github_token": "",
+  "max_repo_size_mb": 500,
+  "max_blob_bytes": 1048576,
+  "refresh_minutes": 60,
+  "workers": 1,
+  "max_owner_repos": 300,
+  "analyze_timeout_minutes": 30,
+  "telegram": {
+    "bot": "",
+    "chat": ""
+  }
+}
